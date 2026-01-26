@@ -1,0 +1,154 @@
+import { useEffect, useRef } from 'react';
+import type { PitchSample } from '../hooks/usePitchDetector';
+import { formatNoteLabel } from '../utils/pitch';
+
+const LOWEST_NOTE = 36; // C2
+const HIGHEST_NOTE = 96; // C8
+
+type Props = {
+  sample: PitchSample;
+  historyDuration: number; // seconds
+  height?: number;
+};
+
+export function PitchGraph({ sample, historyDuration, height = 320 }: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const historyRef = useRef<PitchSample[]>([]);
+  const sampleRef = useRef<PitchSample>(sample);
+  const sizeRef = useRef({ width: 800, height });
+
+  useEffect(() => {
+    sampleRef.current = sample;
+  }, [sample]);
+
+  useEffect(() => {
+    const now = sample.timestamp || performance.now();
+    historyRef.current = [...historyRef.current, { ...sample, timestamp: now }];
+
+    const cutoff = now - historyDuration * 1000;
+    historyRef.current = historyRef.current.filter((s) => s.timestamp >= cutoff);
+  }, [sample, historyDuration]);
+
+  useEffect(() => {
+    const updateSize = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const parent = canvas.parentElement;
+      const width = parent ? parent.clientWidth : 800;
+      sizeRef.current = { width, height };
+    };
+
+    updateSize();
+    window.addEventListener('resize', updateSize);
+
+    return () => window.removeEventListener('resize', updateSize);
+  }, [height]);
+
+  useEffect(() => {
+    let rafId = 0;
+
+    const draw = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const { width, height: h } = sizeRef.current;
+      const dpr = window.devicePixelRatio || 1;
+
+      canvas.width = width * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${h}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, width, h);
+
+      // Octave lines
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+
+      for (let octave = 2; octave <= 8; octave++) {
+        const midi = (octave + 1) * 12;
+        const y = mapMidiToY(midi, h);
+
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+
+        ctx.fillStyle = '#64748b';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`C${octave}`, 6, y - 4);
+      }
+
+      const now = performance.now();
+      const pixelsPerMs = width / (historyDuration * 1000);
+
+      // Pitch line
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      let drawing = false;
+      for (const s of historyRef.current) {
+        if (s.midi == null) {
+          drawing = false;
+          continue;
+        }
+
+        const x = width - (now - s.timestamp) * pixelsPerMs;
+        if (x < 0) continue;
+
+        const y = mapMidiToY(s.midi, h);
+
+        if (!drawing) {
+          ctx.moveTo(x, y);
+          drawing = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+
+      // Current point
+      const current = sampleRef.current;
+      if (current.midi != null) {
+        const y = mapMidiToY(current.midi, h);
+        const x = width - 2;
+
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(formatNoteLabel(current.midi), width - 10, y - 10);
+      }
+
+      rafId = requestAnimationFrame(draw);
+    };
+
+    rafId = requestAnimationFrame(draw);
+
+    return () => cancelAnimationFrame(rafId);
+  }, [historyDuration]);
+
+  return (
+    <div className="pitch-graph">
+      <canvas ref={canvasRef} />
+    </div>
+  );
+}
+
+function mapMidiToY(midi: number, height: number) {
+  const clamped = Math.max(LOWEST_NOTE, Math.min(HIGHEST_NOTE, midi));
+  const range = HIGHEST_NOTE - LOWEST_NOTE;
+  const normalized = (HIGHEST_NOTE - clamped) / range;
+  return normalized * height;
+}
