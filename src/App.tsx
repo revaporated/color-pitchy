@@ -9,10 +9,12 @@ export default function App() {
   const [enabled, setEnabled] = useState(false);
   const [clarityThreshold, setClarityThreshold] = useState(0.9);
   const [historyDuration, setHistoryDuration] = useState(4);
+  const [fftSize, setFftSize] = useState(2048);
 
   const { sample, error } = usePitchDetector({
     enabled,
     clarityThreshold,
+    fftSize,
   });
 
   return (
@@ -28,9 +30,11 @@ export default function App() {
         enabled={enabled}
         clarityThreshold={clarityThreshold}
         historyDuration={historyDuration}
+        fftSize={fftSize}
         setEnabled={setEnabled}
         setClarityThreshold={setClarityThreshold}
         setHistoryDuration={setHistoryDuration}
+        setFftSize={setFftSize}
       />
 
       <PitchStats sample={sample} />
