@@ -5,10 +5,12 @@ type Props = {
   clarityThreshold: number;
   historyDuration: number;
   fftSize: number;
+  colorizeMarker: boolean;
   setEnabled: Dispatch<SetStateAction<boolean>>;
   setClarityThreshold: Dispatch<SetStateAction<number>>;
   setHistoryDuration: Dispatch<SetStateAction<number>>;
   setFftSize: Dispatch<SetStateAction<number>>;
+  setColorizeMarker: Dispatch<SetStateAction<boolean>>;
 };
 
 const FFT_SIZES = [1024, 2048, 4096, 8192] as const;
@@ -18,10 +20,12 @@ export function PitchControls({
   clarityThreshold,
   historyDuration,
   fftSize,
+  colorizeMarker,
   setEnabled,
   setClarityThreshold,
   setHistoryDuration,
   setFftSize,
+  setColorizeMarker,
 }: Props) {
   const fallbackIndex = 1;
   const foundIndex = FFT_SIZES.findIndex((value) => value === fftSize);
@@ -71,6 +75,15 @@ export function PitchControls({
             setHistoryDuration(parseInt(event.target.value, 10))
           }
         />
+      </label>
+
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={colorizeMarker}
+          onChange={(event) => setColorizeMarker(event.target.checked)}
+        />
+        Color marker
       </label>
     </div>
   );

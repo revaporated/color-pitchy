@@ -10,6 +10,7 @@ export default function App() {
   const [clarityThreshold, setClarityThreshold] = useState(0.9);
   const [historyDuration, setHistoryDuration] = useState(4);
   const [fftSize, setFftSize] = useState(2048);
+  const [colorizeMarker, setColorizeMarker] = useState(true);
 
   const { sample, error } = usePitchDetector({
     enabled,
@@ -23,7 +24,12 @@ export default function App() {
       {error && <div className="error">{error}</div>}
 
       <div className="card">
-        <PitchGraph sample={sample} historyDuration={historyDuration} height={320} />
+        <PitchGraph
+          sample={sample}
+          historyDuration={historyDuration}
+          height={320}
+          colorizeMarker={colorizeMarker}
+        />
       </div>
 
       <PitchControls
@@ -31,10 +37,12 @@ export default function App() {
         clarityThreshold={clarityThreshold}
         historyDuration={historyDuration}
         fftSize={fftSize}
+        colorizeMarker={colorizeMarker}
         setEnabled={setEnabled}
         setClarityThreshold={setClarityThreshold}
         setHistoryDuration={setHistoryDuration}
         setFftSize={setFftSize}
+        setColorizeMarker={setColorizeMarker}
       />
 
       <PitchStats sample={sample} />

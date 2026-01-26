@@ -39,6 +39,16 @@ h1 {
   font-size: 14px;
 }
 
+.controls label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.controls label.checkbox input {
+  margin: 0;
+}
+
 button {
   padding: 8px 12px;
   border-radius: 8px;

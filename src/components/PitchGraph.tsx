@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { PitchSample } from '../hooks/usePitchDetector';
-import { formatNoteLabel } from '../utils/pitch';
+import { formatNoteLabel, midiToNoteIndex, PITCH_COLOR_SHAPE_MAP } from '../utils/pitch';
 
 const LOWEST_NOTE = 36; // C2
 const HIGHEST_NOTE = 96; // C8
@@ -8,10 +8,16 @@ const HIGHEST_NOTE = 96; // C8
 type Props = {
   sample: PitchSample;
   historyDuration: number; // seconds
+  colorizeMarker: boolean;
   height?: number;
 };
 
-export function PitchGraph({ sample, historyDuration, height = 320 }: Props) {
+export function PitchGraph({
+  sample,
+  historyDuration,
+  colorizeMarker,
+  height = 320,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const historyRef = useRef<PitchSample[]>([]);
   const sampleRef = useRef<PitchSample>(sample);
@@ -121,11 +127,14 @@ export function PitchGraph({ sample, historyDuration, height = 320 }: Props) {
         const y = mapMidiToY(current.midi, h);
         const x = width - 2;
 
-        ctx.fillStyle = '#0f172a';
-        ctx.beginPath();
-        ctx.arc(x, y, 5, 0, Math.PI * 2);
-        ctx.fill();
+        const noteIndex = midiToNoteIndex(current.midi);
+        const pitchStyle = PITCH_COLOR_SHAPE_MAP[noteIndex];
+        const markerColor = colorizeMarker ? `rgb(${pitchStyle.rgb})` : '#0f172a';
+        const markerShape = colorizeMarker ? pitchStyle.shape : 'circle';
 
+        drawMarker(ctx, x, y, 5, markerShape, markerColor);
+
+        ctx.fillStyle = '#0f172a';
         ctx.font = 'bold 13px sans-serif';
         ctx.textAlign = 'right';
         ctx.fillText(formatNoteLabel(current.midi), width - 10, y - 10);
@@ -137,7 +146,7 @@ export function PitchGraph({ sample, historyDuration, height = 320 }: Props) {
     rafId = requestAnimationFrame(draw);
 
     return () => cancelAnimationFrame(rafId);
-  }, [historyDuration]);
+  }, [historyDuration, colorizeMarker]);
 
   return (
     <div className="pitch-graph">
@@ -151,4 +160,25 @@ function mapMidiToY(midi: number, height: number) {
   const range = HIGHEST_NOTE - LOWEST_NOTE;
   const normalized = (HIGHEST_NOTE - clamped) / range;
   return normalized * height;
+}
+
+function drawMarker(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  shape: 'square' | 'circle',
+  fill: string
+) {
+  ctx.fillStyle = fill;
+
+  if (shape === 'square') {
+    const size = radius * 2;
+    ctx.fillRect(x - radius, y - radius, size, size);
+    return;
+  }
+
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
 }
