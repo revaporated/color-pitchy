@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { usePitchDetector } from './hooks/usePitchDetector';
+import { PitchControls } from './components/PitchControls';
 import { PitchGraph } from './components/PitchGraph';
-import { formatNoteLabel } from './utils/pitch';
+import { PitchStats } from './components/PitchStats';
 import './index.css';
 
 export default function App() {
@@ -14,12 +15,6 @@ export default function App() {
     clarityThreshold,
   });
 
-  const noteLabel = sample.midi != null ? formatNoteLabel(sample.midi) : '—';
-  const frequencyLabel =
-    sample.frequency != null ? `${sample.frequency.toFixed(2)} Hz` : '—';
-  const clarityLabel =
-    sample.clarity != null ? `${Math.round(sample.clarity * 100)}%` : '—';
-
   return (
     <div className="app">
 
@@ -29,41 +24,16 @@ export default function App() {
         <PitchGraph sample={sample} historyDuration={historyDuration} height={320} />
       </div>
 
-      <div className="card controls">
-        <button onClick={() => setEnabled((v) => !v)}>
-          {enabled ? 'Stop' : 'Start'}
-        </button>
+      <PitchControls
+        enabled={enabled}
+        clarityThreshold={clarityThreshold}
+        historyDuration={historyDuration}
+        setEnabled={setEnabled}
+        setClarityThreshold={setClarityThreshold}
+        setHistoryDuration={setHistoryDuration}
+      />
 
-        <label>
-          Clarity threshold: {Math.round(clarityThreshold * 100)}%
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={clarityThreshold}
-            onChange={(e) => setClarityThreshold(parseFloat(e.target.value))}
-          />
-        </label>
-
-        <label>
-          History (seconds): {historyDuration}
-          <input
-            type="range"
-            min={1}
-            max={10}
-            step={1}
-            value={historyDuration}
-            onChange={(e) => setHistoryDuration(parseInt(e.target.value, 10))}
-          />
-        </label>
-      </div>
-
-      <div className="card stats">
-        <div>Note: {noteLabel}</div>
-        <div>Frequency: {frequencyLabel}</div>
-        <div>Clarity: {clarityLabel}</div>
-      </div>
+      <PitchStats sample={sample} />
     </div>
   );
 }
