@@ -16,12 +16,12 @@ export function PitchGraph({
   sample,
   historyDuration,
   colorizeMarker,
-  height = 320,
+  height,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const historyRef = useRef<PitchSample[]>([]);
   const sampleRef = useRef<PitchSample>(sample);
-  const sizeRef = useRef({ width: 800, height });
+  const sizeRef = useRef({ width: 800, height: height ?? 320 });
 
   useEffect(() => {
     sampleRef.current = sample;
@@ -36,19 +36,32 @@ export function PitchGraph({
   }, [sample, historyDuration]);
 
   useEffect(() => {
-    const updateSize = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
+    const updateSize = () => {
       const parent = canvas.parentElement;
       const width = parent ? parent.clientWidth : 800;
-      sizeRef.current = { width, height };
+      const resolvedHeight = height ?? (parent ? parent.clientHeight : 320);
+      sizeRef.current = { width, height: resolvedHeight };
     };
 
     updateSize();
     window.addEventListener('resize', updateSize);
 
-    return () => window.removeEventListener('resize', updateSize);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      const parent = canvas.parentElement;
+      if (parent) {
+        observer = new ResizeObserver(() => updateSize());
+        observer.observe(parent);
+      }
+    }
+
+    return () => {
+      window.removeEventListener('resize', updateSize);
+      observer?.disconnect();
+    };
   }, [height]);
 
   useEffect(() => {
