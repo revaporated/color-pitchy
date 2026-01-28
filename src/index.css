@@ -264,3 +264,95 @@ button:hover {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+.songs-card {
+  display: grid;
+  gap: 12px;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.file-row input[type="file"] {
+  font-size: 14px;
+}
+
+.file-meta {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.waveform-card {
+  display: grid;
+  gap: 12px;
+}
+
+.waveform-viewport {
+  position: relative;
+  height: 160px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #0f172a;
+}
+
+.waveform-viewport--interactive {
+  cursor: pointer;
+}
+
+.waveform-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+}
+
+.waveform-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #cbd5f5;
+  font-size: 14px;
+  text-align: center;
+  padding: 0 16px;
+}
+
+.waveform-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: #f8fafc;
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.playback-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
