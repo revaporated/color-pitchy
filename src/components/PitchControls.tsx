@@ -26,7 +26,7 @@ type Props = {
   onToggleCollapsed?: () => void;
 };
 
-const FFT_SIZES = [1024, 2048, 4096, 8192] as const;
+const FFT_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384] as const;
 
 export function PitchControls({
   enabled,
