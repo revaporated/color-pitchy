@@ -282,6 +282,7 @@ button:hover {
 }
 
 .file-meta {
+  font-family: 'Cascadia Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
   font-size: 13px;
   color: #64748b;
 }
@@ -295,8 +296,11 @@ button:hover {
   position: relative;
   height: 160px;
   overflow: hidden;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border: 2px solid #e2e8f0;
   background: #0f172a;
 }
 
