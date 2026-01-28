@@ -15,12 +15,14 @@ type Props = {
   fftSize: number;
   colorizeMarker: boolean;
   showNoteLines: boolean;
+  showNoteTrails: boolean;
   setEnabled: Dispatch<SetStateAction<boolean>>;
   setClarityThreshold: Dispatch<SetStateAction<number>>;
   setHistoryDuration: Dispatch<SetStateAction<number>>;
   setFftSize: Dispatch<SetStateAction<number>>;
   setColorizeMarker: Dispatch<SetStateAction<boolean>>;
   setShowNoteLines: Dispatch<SetStateAction<boolean>>;
+  setShowNoteTrails: Dispatch<SetStateAction<boolean>>;
   isFullscreen?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -35,12 +37,14 @@ export function PitchControls({
   fftSize,
   colorizeMarker,
   showNoteLines,
+  showNoteTrails,
   setEnabled,
   setClarityThreshold,
   setHistoryDuration,
   setFftSize,
   setColorizeMarker,
   setShowNoteLines,
+  setShowNoteTrails,
   isFullscreen = false,
   collapsed = false,
   onToggleCollapsed,
@@ -186,6 +190,16 @@ export function PitchControls({
               </button>
             </div>
 
+            <div className="toggle-row">
+              <span className="stepper-label">Note trails</span>
+              <button
+                onClick={() => setShowNoteTrails((value) => !value)}
+                className="toggle-button"
+              >
+                {showNoteTrails ? 'On' : 'Off'}
+              </button>
+            </div>
+
             <button
               className="icon-button card-hide"
               onClick={() => onToggleCollapsed?.()}
@@ -261,6 +275,15 @@ export function PitchControls({
           onChange={(event) => setShowNoteLines(event.target.checked)}
         />
         Note lines
+      </label>
+
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={showNoteTrails}
+          onChange={(event) => setShowNoteTrails(event.target.checked)}
+        />
+        Note trails
       </label>
     </div>
   );

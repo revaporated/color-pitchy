@@ -10,6 +10,7 @@ type Props = {
   historyDuration: number; // seconds
   colorizeMarker: boolean;
   showNoteLines: boolean;
+  showNoteTrails: boolean;
   height?: number;
 };
 
@@ -18,6 +19,7 @@ export function PitchGraph({
   historyDuration,
   colorizeMarker,
   showNoteLines,
+  showNoteTrails,
   height,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -129,6 +131,47 @@ export function PitchGraph({
       const now = performance.now();
       const pixelsPerMs = width / (historyDuration * 1000);
 
+      if (showNoteTrails) {
+        const history = historyRef.current;
+        const minSegmentWidth = 2;
+
+        ctx.save();
+        ctx.globalAlpha = 0.28;
+
+        for (let i = 0; i < history.length; i += 1) {
+          const s = history[i];
+          if (s.midi == null) continue;
+
+          const noteMidi = Math.round(s.midi);
+          const noteIndex = midiToNoteIndex(noteMidi);
+          const { rgb } = PITCH_COLOR_SHAPE_MAP[noteIndex];
+          ctx.fillStyle = `rgb(${rgb})`;
+
+          const x = width - (now - s.timestamp) * pixelsPerMs;
+          const next = history[i + 1];
+          const nextX =
+            next?.midi != null
+              ? width - (now - next.timestamp) * pixelsPerMs
+              : x + minSegmentWidth;
+          const startX = Math.min(x, nextX);
+          const endX = Math.max(x, nextX);
+
+          if (endX < 0 || startX > width) continue;
+
+          const topY = mapMidiToY(noteMidi + 0.5, h);
+          const bottomY = mapMidiToY(noteMidi - 0.5, h);
+          const y = Math.min(topY, bottomY);
+          const rectHeight = Math.abs(bottomY - topY);
+          const rectX = Math.max(0, startX);
+          const rectWidth = Math.min(width, endX) - rectX;
+
+          if (rectWidth <= 0 || rectHeight <= 0) continue;
+          ctx.fillRect(rectX, y, Math.max(minSegmentWidth, rectWidth), rectHeight);
+        }
+
+        ctx.restore();
+      }
+
       // Pitch line
       ctx.strokeStyle = '#334155';
       ctx.lineWidth = 2;
@@ -180,7 +223,7 @@ export function PitchGraph({
     rafId = requestAnimationFrame(draw);
 
     return () => cancelAnimationFrame(rafId);
-  }, [historyDuration, colorizeMarker, showNoteLines]);
+  }, [historyDuration, colorizeMarker, showNoteLines, showNoteTrails]);
 
   return (
     <div className="pitch-graph">
