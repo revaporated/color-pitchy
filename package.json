@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/cascadia-mono": "^5.2.3",
     "meyda": "^5.6.3",
     "pitchy": "^4.1.0",
     "react": "^19.2.0",

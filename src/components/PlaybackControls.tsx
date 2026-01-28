@@ -1,3 +1,5 @@
+import { FiPause, FiPlay, FiSquare } from 'react-icons/fi'
+
 type Props = {
   isPlaying: boolean
   hasAudio: boolean
@@ -30,11 +32,23 @@ export const PlaybackControls = ({
 
   return (
     <div className="playback-controls">
-      <button type="button" onClick={onPlayPause} disabled={!hasAudio}>
-        {isPlaying ? 'Pause' : 'Play'}
+      <button
+        type="button"
+        onClick={onPlayPause}
+        disabled={!hasAudio}
+        className="icon-button"
+        aria-label={isPlaying ? 'Pause playback' : 'Play audio'}
+      >
+        {isPlaying ? <FiPause /> : <FiPlay />}
       </button>
-      <button type="button" onClick={onStop} disabled={!hasAudio}>
-        Stop
+      <button
+        type="button"
+        onClick={onStop}
+        disabled={!hasAudio}
+        className="icon-button"
+        aria-label="Stop playback"
+      >
+        <FiSquare />
       </button>
       {hasAudio && duration > 0 && (
         <span className="file-meta">

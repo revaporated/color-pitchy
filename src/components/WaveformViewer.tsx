@@ -7,6 +7,13 @@ import {
   buildPeaks,
 } from '../utils/waveform'
 
+const formatMarkerLabel = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+
+  return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`
+}
+
 type Props = {
   audioBuffer: AudioBuffer | null
   audioRef: RefObject<HTMLAudioElement>
@@ -34,6 +41,29 @@ export const WaveformViewer = ({
     [audioBuffer],
   )
   const waveformWidth = peaks?.length ?? 0
+  const markers = useMemo(() => {
+    if (!duration || waveformWidth === 0) return []
+
+    const lastSecond = Math.max(0, Math.floor(duration))
+    const items: Array<{
+      second: number
+      isMajor: boolean
+      label: string | null
+      left: number
+    }> = []
+
+    for (let second = 0; second <= lastSecond; second += 1) {
+      const isMajor = second % 5 === 0
+      items.push({
+        second,
+        isMajor,
+        label: isMajor ? formatMarkerLabel(second) : null,
+        left: second * PIXELS_PER_SECOND,
+      })
+    }
+
+    return items
+  }, [duration, waveformWidth])
 
   const scrollToTime = useCallback(
     (time: number) => {
@@ -162,7 +192,26 @@ export const WaveformViewer = ({
       onClick={handleWaveformClick}
     >
       {hasWaveform ? (
-        <canvas ref={canvasRef} className="waveform-canvas" />
+        <>
+          <div
+            className="waveform-markers"
+            style={{ width: `${waveformWidth}px` }}
+            aria-hidden="true"
+          >
+            {markers.map((marker) => (
+              <div
+                key={marker.second}
+                className={`waveform-marker${marker.isMajor ? ' waveform-marker--major' : ''}`}
+                style={{ left: `${marker.left}px` }}
+              >
+                {marker.label && (
+                  <span className="waveform-marker-label">{marker.label}</span>
+                )}
+              </div>
+            ))}
+          </div>
+          <canvas ref={canvasRef} className="waveform-canvas" />
+        </>
       ) : (
         <div className="waveform-placeholder">Upload an MP3 to see the waveform.</div>
       )}

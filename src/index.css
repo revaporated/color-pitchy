@@ -306,9 +306,46 @@ button:hover {
 
 .waveform-canvas {
   position: absolute;
-  top: 0;
+  top: 26px;
   left: 0;
   display: block;
+}
+
+.waveform-markers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 26px;
+  pointer-events: none;
+  z-index: 1;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.waveform-marker {
+  position: absolute;
+  top: 16px;
+  width: 1px;
+  height: 8px;
+  background: rgba(226, 232, 240, 0.5);
+}
+
+.waveform-marker--major {
+  top: 14px;
+  height: 10px;
+  background: rgba(226, 232, 240, 0.85);
+}
+
+.waveform-marker-label {
+  position: absolute;
+  top: -12px;
+  left: 0;
+  transform: translateX(-50%);
+  font-family: 'Cascadia Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: #cbd5f5;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .waveform-placeholder {
@@ -332,6 +369,7 @@ button:hover {
   background: #f8fafc;
   opacity: 0.8;
   pointer-events: none;
+  z-index: 2;
 }
 
 .playback-controls {
