@@ -9,6 +9,7 @@ type Props = {
   sample: PitchSample;
   historyDuration: number; // seconds
   colorizeMarker: boolean;
+  showNoteLines: boolean;
   height?: number;
 };
 
@@ -16,6 +17,7 @@ export function PitchGraph({
   sample,
   historyDuration,
   colorizeMarker,
+  showNoteLines,
   height,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -85,6 +87,25 @@ export function PitchGraph({
 
       ctx.fillStyle = '#f8fafc';
       ctx.fillRect(0, 0, width, h);
+
+      if (showNoteLines) {
+        ctx.save();
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.4;
+
+        for (let midi = LOWEST_NOTE; midi <= HIGHEST_NOTE; midi += 1) {
+          if (midiToNoteIndex(midi) === 0) continue;
+          const y = mapMidiToY(midi, h);
+
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
 
       // Octave lines
       ctx.strokeStyle = '#e2e8f0';
@@ -159,7 +180,7 @@ export function PitchGraph({
     rafId = requestAnimationFrame(draw);
 
     return () => cancelAnimationFrame(rafId);
-  }, [historyDuration, colorizeMarker]);
+  }, [historyDuration, colorizeMarker, showNoteLines]);
 
   return (
     <div className="pitch-graph">

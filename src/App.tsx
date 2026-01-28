@@ -12,6 +12,7 @@ export default function App() {
   const [historyDuration, setHistoryDuration] = useState(4);
   const [fftSize, setFftSize] = useState(2048);
   const [colorizeMarker, setColorizeMarker] = useState(true);
+  const [showNoteLines, setShowNoteLines] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsCollapsed, setControlsCollapsed] = useState(false);
   const [statsCollapsed, setStatsCollapsed] = useState(false);
@@ -40,6 +41,7 @@ export default function App() {
           historyDuration={historyDuration}
           height={graphHeight}
           colorizeMarker={colorizeMarker}
+          showNoteLines={showNoteLines}
         />
       </div>
       <button
@@ -58,11 +60,13 @@ export default function App() {
             historyDuration={historyDuration}
             fftSize={fftSize}
             colorizeMarker={colorizeMarker}
+            showNoteLines={showNoteLines}
             setEnabled={setEnabled}
             setClarityThreshold={setClarityThreshold}
             setHistoryDuration={setHistoryDuration}
             setFftSize={setFftSize}
             setColorizeMarker={setColorizeMarker}
+            setShowNoteLines={setShowNoteLines}
             isFullscreen
             collapsed={controlsCollapsed}
             onToggleCollapsed={() => setControlsCollapsed((value) => !value)}
@@ -92,11 +96,13 @@ export default function App() {
             historyDuration={historyDuration}
             fftSize={fftSize}
             colorizeMarker={colorizeMarker}
+            showNoteLines={showNoteLines}
             setEnabled={setEnabled}
             setClarityThreshold={setClarityThreshold}
             setHistoryDuration={setHistoryDuration}
             setFftSize={setFftSize}
             setColorizeMarker={setColorizeMarker}
+            setShowNoteLines={setShowNoteLines}
           />
 
           <PitchStats sample={sample} />

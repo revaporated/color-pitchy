@@ -14,11 +14,13 @@ type Props = {
   historyDuration: number;
   fftSize: number;
   colorizeMarker: boolean;
+  showNoteLines: boolean;
   setEnabled: Dispatch<SetStateAction<boolean>>;
   setClarityThreshold: Dispatch<SetStateAction<number>>;
   setHistoryDuration: Dispatch<SetStateAction<number>>;
   setFftSize: Dispatch<SetStateAction<number>>;
   setColorizeMarker: Dispatch<SetStateAction<boolean>>;
+  setShowNoteLines: Dispatch<SetStateAction<boolean>>;
   isFullscreen?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -32,11 +34,13 @@ export function PitchControls({
   historyDuration,
   fftSize,
   colorizeMarker,
+  showNoteLines,
   setEnabled,
   setClarityThreshold,
   setHistoryDuration,
   setFftSize,
   setColorizeMarker,
+  setShowNoteLines,
   isFullscreen = false,
   collapsed = false,
   onToggleCollapsed,
@@ -172,6 +176,16 @@ export function PitchControls({
               </button>
             </div>
 
+            <div className="toggle-row">
+              <span className="stepper-label">Note lines</span>
+              <button
+                onClick={() => setShowNoteLines((value) => !value)}
+                className="toggle-button"
+              >
+                {showNoteLines ? 'On' : 'Off'}
+              </button>
+            </div>
+
             <button
               className="icon-button card-hide"
               onClick={() => onToggleCollapsed?.()}
@@ -238,6 +252,15 @@ export function PitchControls({
           onChange={(event) => setColorizeMarker(event.target.checked)}
         />
         Color marker
+      </label>
+
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={showNoteLines}
+          onChange={(event) => setShowNoteLines(event.target.checked)}
+        />
+        Note lines
       </label>
     </div>
   );
