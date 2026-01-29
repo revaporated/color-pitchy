@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ChangeEvent, RefObject } from 'react'
 import { AudioUpload } from '../components/AudioUpload'
 import { PlaybackControls } from '../components/PlaybackControls'
@@ -27,15 +27,62 @@ export default function SongsPage() {
       onPlayError: handlePlayError,
     })
 
+  const [viewMode, setViewMode] = useState<'pan' | 'select'>('pan')
+  const [panMode, setPanMode] = useState<'scroll' | 'scrub'>('scroll')
+  const [loopEnabled, setLoopEnabled] = useState(false)
+  const [selection, setSelection] = useState<{ start: number; end: number } | null>(
+    null,
+  )
+
   const handleUpload = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       stop()
+      setSelection(null)
+      setLoopEnabled(false)
       handleFileChange(event)
     },
     [handleFileChange, stop],
   )
 
   const hasAudio = Boolean(audioUrl && audioBuffer)
+
+  const handleSelectionChange = useCallback(
+    (nextSelection: { start: number; end: number } | null) => {
+      setSelection(nextSelection)
+      setLoopEnabled(Boolean(nextSelection))
+    },
+    [],
+  )
+
+  const handleSelectionClear = useCallback(() => {
+    setSelection(null)
+    setLoopEnabled(false)
+  }, [])
+
+  const handlePlayPause = useCallback(() => {
+    if (!isPlaying && loopEnabled && selection) {
+      const start = Math.min(selection.start, selection.end)
+      const end = Math.max(selection.start, selection.end)
+      if (currentTime < start || currentTime > end) {
+        seek(start)
+      }
+    }
+
+    playPause()
+  }, [currentTime, isPlaying, loopEnabled, playPause, seek, selection])
+
+  useEffect(() => {
+    if (!isPlaying || !loopEnabled || !selection) return
+
+    const start = Math.min(selection.start, selection.end)
+    const end = Math.max(selection.start, selection.end)
+    if (end <= start) return
+
+    const epsilon = 0.03
+    if (currentTime >= end - epsilon) {
+      seek(start)
+    }
+  }, [currentTime, isPlaying, loopEnabled, seek, selection])
 
   return (
     <div className="app">
@@ -54,6 +101,10 @@ export default function SongsPage() {
           isPlaying={isPlaying}
           currentTime={currentTime}
           onSeek={seek}
+          viewMode={viewMode}
+          panMode={panMode}
+          selection={selection}
+          onSelectionChange={handleSelectionChange}
         />
 
         <PlaybackControls
@@ -61,8 +112,16 @@ export default function SongsPage() {
           hasAudio={hasAudio}
           currentTime={currentTime}
           duration={duration}
-          onPlayPause={playPause}
+          viewMode={viewMode}
+          panMode={panMode}
+          loopEnabled={loopEnabled}
+          hasSelection={Boolean(selection)}
+          onPlayPause={handlePlayPause}
           onStop={stop}
+          onViewModeChange={setViewMode}
+          onPanModeChange={setPanMode}
+          onToggleLoop={() => setLoopEnabled((value) => !value)}
+          onClearSelection={handleSelectionClear}
         />
 
         <audio ref={audioRef} src={audioUrl ?? undefined} preload="auto" hidden />

@@ -1,12 +1,21 @@
 import { FiPause, FiPlay, FiSquare } from 'react-icons/fi'
+import { LuHand, LuTextCursor } from 'react-icons/lu'
 
 type Props = {
   isPlaying: boolean
   hasAudio: boolean
   currentTime: number
   duration: number
+  viewMode: 'pan' | 'select'
+  panMode: 'scroll' | 'scrub'
+  loopEnabled: boolean
+  hasSelection: boolean
   onPlayPause: () => void
   onStop: () => void
+  onViewModeChange: (mode: 'pan' | 'select') => void
+  onPanModeChange: (mode: 'scroll' | 'scrub') => void
+  onToggleLoop: () => void
+  onClearSelection: () => void
 }
 
 const formatTimecode = (time: number) => {
@@ -25,36 +34,113 @@ export const PlaybackControls = ({
   hasAudio,
   currentTime,
   duration,
+  viewMode,
+  panMode,
+  loopEnabled,
+  hasSelection,
   onPlayPause,
   onStop,
+  onViewModeChange,
+  onPanModeChange,
+  onToggleLoop,
+  onClearSelection,
 }: Props) => {
   const displayTime = duration > 0 ? Math.min(currentTime, duration) : currentTime
 
   return (
     <div className="playback-controls">
-      <button
-        type="button"
-        onClick={onPlayPause}
-        disabled={!hasAudio}
-        className="icon-button"
-        aria-label={isPlaying ? 'Pause playback' : 'Play audio'}
-      >
-        {isPlaying ? <FiPause /> : <FiPlay />}
-      </button>
-      <button
-        type="button"
-        onClick={onStop}
-        disabled={!hasAudio}
-        className="icon-button"
-        aria-label="Stop playback"
-      >
-        <FiSquare />
-      </button>
-      {hasAudio && duration > 0 && (
-        <span className="file-meta">
-          {formatTimecode(displayTime)}/{formatTimecode(duration)}
-        </span>
-      )}
+      <div className="playback-controls__row">
+        <button
+          type="button"
+          onClick={onPlayPause}
+          disabled={!hasAudio}
+          className="icon-button"
+          aria-label={isPlaying ? 'Pause playback' : 'Play audio'}
+        >
+          {isPlaying ? <FiPause /> : <FiPlay />}
+        </button>
+        <button
+          type="button"
+          onClick={onStop}
+          disabled={!hasAudio}
+          className="icon-button"
+          aria-label="Stop playback"
+        >
+          <FiSquare />
+        </button>
+        {hasAudio && duration > 0 && (
+          <span className="file-meta">
+            {formatTimecode(displayTime)}/{formatTimecode(duration)}
+          </span>
+        )}
+      </div>
+      <div className="playback-controls__row playback-controls__row--modes">
+        <button
+          type="button"
+          onClick={() => onViewModeChange('pan')}
+          disabled={!hasAudio}
+          className={`icon-button${viewMode === 'pan' ? ' is-active' : ''}`}
+          aria-label="Pan mode"
+          aria-pressed={viewMode === 'pan'}
+        >
+          <LuHand />
+        </button>
+        {viewMode === 'pan' && (
+          <div className="playback-controls__group">
+            <button
+              type="button"
+              onClick={() => onPanModeChange('scroll')}
+              disabled={!hasAudio}
+              className={`toggle-button${panMode === 'scroll' ? ' is-active' : ''}`}
+              aria-pressed={panMode === 'scroll'}
+            >
+              Scroll
+            </button>
+            <button
+              type="button"
+              onClick={() => onPanModeChange('scrub')}
+              disabled={!hasAudio}
+              className={`toggle-button${panMode === 'scrub' ? ' is-active' : ''}`}
+              aria-pressed={panMode === 'scrub'}
+            >
+              Scrub
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="playback-controls__row playback-controls__row--secondary">
+        <button
+          type="button"
+          onClick={() => onViewModeChange('select')}
+          disabled={!hasAudio}
+          className={`icon-button${viewMode === 'select' ? ' is-active' : ''}`}
+          aria-label="Select mode"
+          aria-pressed={viewMode === 'select'}
+        >
+          <LuTextCursor />
+        </button>
+        {hasSelection && (
+          <>
+            <button
+              type="button"
+              onClick={onToggleLoop}
+              disabled={!hasAudio}
+              className={`toggle-button${loopEnabled ? ' is-active' : ''}`}
+              aria-pressed={loopEnabled}
+            >
+              Loop
+            </button>
+            <button
+              type="button"
+              onClick={onClearSelection}
+              disabled={!hasSelection}
+              className="toggle-button"
+            >
+              Clear
+            </button>
+          </>
+        )}
+      </div>
     </div>
   )
 }
