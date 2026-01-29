@@ -12,6 +12,8 @@ type Props = {
   showNoteLines: boolean;
   showNoteTrails: boolean;
   height?: number;
+  isRecording?: boolean;
+  recordingStartAt?: number | null;
 };
 
 export function PitchGraph({
@@ -21,6 +23,8 @@ export function PitchGraph({
   showNoteLines,
   showNoteTrails,
   height,
+  isRecording = false,
+  recordingStartAt = null,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const historyRef = useRef<PitchSample[]>([]);
@@ -172,6 +176,22 @@ export function PitchGraph({
         ctx.restore();
       }
 
+      if (isRecording && recordingStartAt != null) {
+        const markerX = width - (now - recordingStartAt) * pixelsPerMs;
+
+        if (markerX >= 0 && markerX <= width) {
+          ctx.save();
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 2;
+          ctx.globalAlpha = 0.7;
+          ctx.beginPath();
+          ctx.moveTo(markerX, 0);
+          ctx.lineTo(markerX, h);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
       // Pitch line
       ctx.strokeStyle = '#334155';
       ctx.lineWidth = 2;
@@ -223,7 +243,14 @@ export function PitchGraph({
     rafId = requestAnimationFrame(draw);
 
     return () => cancelAnimationFrame(rafId);
-  }, [historyDuration, colorizeMarker, showNoteLines, showNoteTrails]);
+  }, [
+    historyDuration,
+    colorizeMarker,
+    showNoteLines,
+    showNoteTrails,
+    isRecording,
+    recordingStartAt,
+  ]);
 
   return (
     <div className="pitch-graph">
