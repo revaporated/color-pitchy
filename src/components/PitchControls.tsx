@@ -16,6 +16,7 @@ type Props = {
   colorizeMarker: boolean;
   showNoteLines: boolean;
   showNoteTrails: boolean;
+  showDiagnostics: boolean;
   setEnabled: Dispatch<SetStateAction<boolean>>;
   setClarityThreshold: Dispatch<SetStateAction<number>>;
   setHistoryDuration: Dispatch<SetStateAction<number>>;
@@ -23,6 +24,7 @@ type Props = {
   setColorizeMarker: Dispatch<SetStateAction<boolean>>;
   setShowNoteLines: Dispatch<SetStateAction<boolean>>;
   setShowNoteTrails: Dispatch<SetStateAction<boolean>>;
+  setShowDiagnostics: Dispatch<SetStateAction<boolean>>;
   isFullscreen?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -38,6 +40,7 @@ export function PitchControls({
   colorizeMarker,
   showNoteLines,
   showNoteTrails,
+  showDiagnostics,
   setEnabled,
   setClarityThreshold,
   setHistoryDuration,
@@ -45,6 +48,7 @@ export function PitchControls({
   setColorizeMarker,
   setShowNoteLines,
   setShowNoteTrails,
+  setShowDiagnostics,
   isFullscreen = false,
   collapsed = false,
   onToggleCollapsed,
@@ -200,6 +204,16 @@ export function PitchControls({
               </button>
             </div>
 
+            <div className="toggle-row">
+              <span className="stepper-label">Diagnostics</span>
+              <button
+                onClick={() => setShowDiagnostics((value) => !value)}
+                className="toggle-button"
+              >
+                {showDiagnostics ? 'On' : 'Off'}
+              </button>
+            </div>
+
             <button
               className="icon-button card-hide"
               onClick={() => onToggleCollapsed?.()}
@@ -284,6 +298,15 @@ export function PitchControls({
           onChange={(event) => setShowNoteTrails(event.target.checked)}
         />
         Note trails
+      </label>
+
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={showDiagnostics}
+          onChange={(event) => setShowDiagnostics(event.target.checked)}
+        />
+        Diagnostics
       </label>
     </div>
   );

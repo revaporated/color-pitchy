@@ -9,6 +9,7 @@ import { RecordingControls } from './components/RecordingControls';
 import './index.css';
 
 const GRAPH_MAX_FPS = 165; // Main control for pitch graph animation frame rate
+const DETECTION_RATE_HZ = 165;
 
 export default function App() {
   const [enabled, setEnabled] = useState(false);
@@ -18,6 +19,7 @@ export default function App() {
   const [colorizeMarker, setColorizeMarker] = useState(true);
   const [showNoteLines, setShowNoteLines] = useState(false);
   const [showNoteTrails, setShowNoteTrails] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsCollapsed, setControlsCollapsed] = useState(false);
   const [statsCollapsed, setStatsCollapsed] = useState(false);
@@ -28,6 +30,8 @@ export default function App() {
     enabled,
     clarityThreshold,
     fftSize,
+    detectionRateHz: DETECTION_RATE_HZ,
+    trackDetectionsPerSecond: showDiagnostics,
   });
   const {
     isRecording,
@@ -60,6 +64,8 @@ export default function App() {
           recordingStartAt={recordingStartAt}
           maxFps={GRAPH_MAX_FPS}
           detectionsPerSecond={detectionsPerSecond}
+          detectionRateHz={DETECTION_RATE_HZ}
+          showDiagnostics={showDiagnostics}
         />
       </div>
       <div className="graph-actions">
@@ -91,6 +97,7 @@ export default function App() {
             colorizeMarker={colorizeMarker}
             showNoteLines={showNoteLines}
             showNoteTrails={showNoteTrails}
+            showDiagnostics={showDiagnostics}
             setEnabled={setEnabled}
             setClarityThreshold={setClarityThreshold}
             setHistoryDuration={setHistoryDuration}
@@ -98,6 +105,7 @@ export default function App() {
             setColorizeMarker={setColorizeMarker}
             setShowNoteLines={setShowNoteLines}
             setShowNoteTrails={setShowNoteTrails}
+            setShowDiagnostics={setShowDiagnostics}
             isFullscreen
             collapsed={controlsCollapsed}
             onToggleCollapsed={() => setControlsCollapsed((value) => !value)}
@@ -140,6 +148,7 @@ export default function App() {
             colorizeMarker={colorizeMarker}
             showNoteLines={showNoteLines}
             showNoteTrails={showNoteTrails}
+            showDiagnostics={showDiagnostics}
             setEnabled={setEnabled}
             setClarityThreshold={setClarityThreshold}
             setHistoryDuration={setHistoryDuration}
@@ -147,6 +156,7 @@ export default function App() {
             setColorizeMarker={setColorizeMarker}
             setShowNoteLines={setShowNoteLines}
             setShowNoteTrails={setShowNoteTrails}
+            setShowDiagnostics={setShowDiagnostics}
           />
 
           <PitchStats sample={sample} />

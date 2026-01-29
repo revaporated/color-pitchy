@@ -5,6 +5,13 @@ import { formatNoteLabel, midiToNoteIndex, PITCH_COLOR_SHAPE_MAP } from '../util
 const LOWEST_NOTE = 36; // C2
 const HIGHEST_NOTE = 96; // C8
 
+type HistoryBuffer = {
+  data: Array<PitchSample | null>;
+  head: number;
+  count: number;
+  capacity: number;
+};
+
 type Props = {
   sample: PitchSample;
   historyDuration: number; // seconds
@@ -16,6 +23,8 @@ type Props = {
   recordingStartAt?: number | null;
   detectionsPerSecond?: number;
   maxFps?: number;
+  detectionRateHz?: number;
+  showDiagnostics?: boolean;
 };
 
 export function PitchGraph({
@@ -29,9 +38,17 @@ export function PitchGraph({
   recordingStartAt = null,
   detectionsPerSecond = 0,
   maxFps = 165,
+  detectionRateHz = 165,
+  showDiagnostics = true,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const historyRef = useRef<PitchSample[]>([]);
+  const historyRef = useRef<HistoryBuffer>({
+    data: [],
+    head: 0,
+    count: 0,
+    capacity: 0,
+  });
+  const detectionRateRef = useRef(detectionRateHz || maxFps);
   const sampleRef = useRef<PitchSample>(sample);
   const sizeRef = useRef({ width: 800, height: height ?? 320 });
   const fpsRef = useRef({
@@ -46,6 +63,14 @@ export function PitchGraph({
   });
   const detectionsRef = useRef(detectionsPerSecond);
   const lastDrawRef = useRef(0);
+  const canvasSizeRef = useRef({ width: 0, height: 0, dpr: 0 });
+  const staticCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const staticConfigRef = useRef({
+    width: 0,
+    height: 0,
+    dpr: 0,
+    showNoteLines: false,
+  });
 
   useEffect(() => {
     sampleRef.current = sample;
@@ -55,8 +80,48 @@ export function PitchGraph({
     detectionsRef.current = detectionsPerSecond;
   }, [detectionsPerSecond]);
 
+  useEffect(() => {
+    if (detectionRateHz > 0) {
+      detectionRateRef.current = detectionRateHz;
+    }
+  }, [detectionRateHz]);
+
+  const resizeHistoryBuffer = (capacity: number) => {
+    const history = historyRef.current;
+    if (capacity <= 0 || history.capacity === capacity) return;
+
+    const nextData = new Array<PitchSample | null>(capacity).fill(null);
+    const count = Math.min(history.count, capacity);
+
+    if (history.count > 0 && history.capacity > 0 && count > 0) {
+      const startIndex =
+        (history.head - history.count + history.capacity) % history.capacity;
+      const startOffset = Math.max(0, history.count - count);
+
+      for (let i = 0; i < count; i += 1) {
+        const sourceIndex =
+          (startIndex + startOffset + i) % history.capacity;
+        nextData[i] = history.data[sourceIndex];
+      }
+    }
+
+    historyRef.current = {
+      data: nextData,
+      head: count % capacity,
+      count,
+      capacity,
+    };
+  };
+
+  useEffect(() => {
+    const rate = detectionRateRef.current || 1;
+    const capacity = Math.max(1, Math.ceil(rate * historyDuration));
+    resizeHistoryBuffer(capacity);
+  }, [historyDuration, detectionRateHz]);
+
   // Frame rate diagnostic for requestAnimationFrame
   useEffect(() => {
+    if (!showDiagnostics) return;
     let rafId = 0;
     const tick = () => {
       const now = performance.now();
@@ -74,14 +139,34 @@ export function PitchGraph({
 
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, []);
+  }, [showDiagnostics]);
 
   useEffect(() => {
-    const now = sample.timestamp || performance.now();
-    historyRef.current = [...historyRef.current, { ...sample, timestamp: now }];
+    const history = historyRef.current;
+    if (history.capacity === 0) {
+      const rate = detectionRateRef.current || 1;
+      resizeHistoryBuffer(Math.max(1, Math.ceil(rate * historyDuration)));
+    }
 
-    const cutoff = now - historyDuration * 1000;
-    historyRef.current = historyRef.current.filter((s) => s.timestamp >= cutoff);
+    const now = sample.timestamp || performance.now();
+    const nextIndex = history.head;
+    const entry = history.data[nextIndex];
+    if (entry) {
+      entry.timestamp = now;
+      entry.frequency = sample.frequency;
+      entry.clarity = sample.clarity;
+      entry.midi = sample.midi;
+    } else {
+      history.data[nextIndex] = {
+        timestamp: now,
+        frequency: sample.frequency,
+        clarity: sample.clarity,
+        midi: sample.midi,
+      };
+    }
+
+    history.head = (nextIndex + 1) % history.capacity;
+    history.count = Math.min(history.count + 1, history.capacity);
   }, [sample, historyDuration]);
 
   useEffect(() => {
@@ -135,66 +220,74 @@ export function PitchGraph({
 
       const { width, height: h } = sizeRef.current;
       const dpr = window.devicePixelRatio || 1;
+      const pixelWidth = Math.max(1, Math.round(width * dpr));
+      const pixelHeight = Math.max(1, Math.round(h * dpr));
 
-      canvas.width = width * dpr;
-      canvas.height = h * dpr;
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${h}px`;
+      if (
+        canvasSizeRef.current.width !== pixelWidth ||
+        canvasSizeRef.current.height !== pixelHeight ||
+        canvasSizeRef.current.dpr !== dpr
+      ) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${h}px`;
+        canvasSizeRef.current = { width: pixelWidth, height: pixelHeight, dpr };
+      }
+
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       ctx.fillStyle = '#f8fafc';
       ctx.fillRect(0, 0, width, h);
+      let staticCanvas = staticCanvasRef.current;
+      if (!staticCanvas) {
+        staticCanvas = document.createElement('canvas');
+        staticCanvasRef.current = staticCanvas;
+      }
 
-      if (showNoteLines) {
-        ctx.save();
-        ctx.strokeStyle = '#e2e8f0';
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.4;
-
-        for (let midi = LOWEST_NOTE; midi <= HIGHEST_NOTE; midi += 1) {
-          if (midiToNoteIndex(midi) === 0) continue;
-          const y = mapMidiToY(midi, h);
-
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(width, y);
-          ctx.stroke();
+      if (
+        staticConfigRef.current.width !== pixelWidth ||
+        staticConfigRef.current.height !== pixelHeight ||
+        staticConfigRef.current.dpr !== dpr ||
+        staticConfigRef.current.showNoteLines !== showNoteLines
+      ) {
+        staticCanvas.width = pixelWidth;
+        staticCanvas.height = pixelHeight;
+        const staticCtx = staticCanvas.getContext('2d');
+        if (staticCtx) {
+          staticCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          staticCtx.clearRect(0, 0, width, h);
+          drawStaticLayer(staticCtx, width, h, showNoteLines);
         }
-
-        ctx.restore();
+        staticConfigRef.current = {
+          width: pixelWidth,
+          height: pixelHeight,
+          dpr,
+          showNoteLines,
+        };
       }
 
-      // Octave lines
-      ctx.strokeStyle = '#e2e8f0';
-      ctx.lineWidth = 1;
-
-      for (let octave = 2; octave <= 8; octave++) {
-        const midi = (octave + 1) * 12;
-        const y = mapMidiToY(midi, h);
-
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
-        ctx.stroke();
-
-        ctx.fillStyle = '#64748b';
-        ctx.font = '12px sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillText(`C${octave}`, 6, y - 4);
-      }
+      ctx.drawImage(staticCanvas, 0, 0, width, h);
 
       const pixelsPerMs = width / (historyDuration * 1000);
+      const history = historyRef.current;
+      const historyCount = history.count;
+      const historyCapacity = history.capacity;
+      const historyStartIndex =
+        historyCount > 0 && historyCapacity > 0
+          ? (history.head - historyCount + historyCapacity) % historyCapacity
+          : 0;
 
-      if (showNoteTrails) {
-        const history = historyRef.current;
+      if (showNoteTrails && historyCount > 0 && historyCapacity > 0) {
         const minSegmentWidth = 2;
 
         ctx.save();
         ctx.globalAlpha = 0.28;
 
-        for (let i = 0; i < history.length; i += 1) {
-          const s = history[i];
-          if (s.midi == null) continue;
+        for (let i = 0; i < historyCount; i += 1) {
+          const s = history.data[(historyStartIndex + i) % historyCapacity];
+          if (!s || s.midi == null) continue;
+          if (now - s.timestamp > historyDuration * 1000) continue;
 
           const noteMidi = Math.round(s.midi);
           const noteIndex = midiToNoteIndex(noteMidi);
@@ -202,9 +295,16 @@ export function PitchGraph({
           ctx.fillStyle = `rgb(${rgb})`;
 
           const x = width - (now - s.timestamp) * pixelsPerMs;
-          const next = history[i + 1];
+          const next =
+            i + 1 < historyCount
+              ? history.data[(historyStartIndex + i + 1) % historyCapacity]
+              : null;
+          const hasNext =
+            next != null &&
+            next.midi != null &&
+            now - next.timestamp <= historyDuration * 1000;
           const nextX =
-            next?.midi != null
+            hasNext
               ? width - (now - next.timestamp) * pixelsPerMs
               : x + minSegmentWidth;
           const startX = Math.min(x, nextX);
@@ -248,22 +348,30 @@ export function PitchGraph({
       ctx.beginPath();
 
       let drawing = false;
-      for (const s of historyRef.current) {
-        if (s.midi == null) {
-          drawing = false;
-          continue;
-        }
+      if (historyCount > 0 && historyCapacity > 0) {
+        for (let i = 0; i < historyCount; i += 1) {
+          const s = history.data[(historyStartIndex + i) % historyCapacity];
+          if (!s || s.midi == null) {
+            drawing = false;
+            continue;
+          }
 
-        const x = width - (now - s.timestamp) * pixelsPerMs;
-        if (x < 0) continue;
+          if (now - s.timestamp > historyDuration * 1000) {
+            drawing = false;
+            continue;
+          }
 
-        const y = mapMidiToY(s.midi, h);
+          const x = width - (now - s.timestamp) * pixelsPerMs;
+          if (x < 0) continue;
 
-        if (!drawing) {
-          ctx.moveTo(x, y);
-          drawing = true;
-        } else {
-          ctx.lineTo(x, y);
+          const y = mapMidiToY(s.midi, h);
+
+          if (!drawing) {
+            ctx.moveTo(x, y);
+            drawing = true;
+          } else {
+            ctx.lineTo(x, y);
+          }
         }
       }
       ctx.stroke();
@@ -287,29 +395,31 @@ export function PitchGraph({
         ctx.fillText(formatNoteLabel(current.midi), width - 10, y - 10);
       }
 
-      fpsRef.current.frames += 1;
-      const fpsElapsed = now - fpsRef.current.lastTime;
-      if (fpsElapsed >= 500) {
-        fpsRef.current.value = Math.round(
-          (fpsRef.current.frames * 1000) / fpsElapsed
-        );
-        fpsRef.current.frames = 0;
-        fpsRef.current.lastTime = now;
-      }
+      if (showDiagnostics) {
+        fpsRef.current.frames += 1;
+        const fpsElapsed = now - fpsRef.current.lastTime;
+        if (fpsElapsed >= 500) {
+          fpsRef.current.value = Math.round(
+            (fpsRef.current.frames * 1000) / fpsElapsed
+          );
+          fpsRef.current.frames = 0;
+          fpsRef.current.lastTime = now;
+        }
 
-      ctx.save();
-      ctx.fillStyle = '#0f172a';
-      ctx.font = '12px monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText(`${fpsRef.current.value} FPS`, width - 8, 16);
-      ctx.fillText(`${detectionsRef.current} det/s`, width - 8, 32);
-      const detMs =
-        detectionsRef.current > 0
-          ? (1000 / detectionsRef.current).toFixed(2)
-          : '0.00';
-      ctx.fillText(`${detMs} ms`, width - 8, 48);
-      ctx.fillText(`${rafFpsRef.current.value} rAF`, width - 8, 64);
-      ctx.restore();
+        ctx.save();
+        ctx.fillStyle = '#0f172a';
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${fpsRef.current.value} FPS`, width - 8, 16);
+        ctx.fillText(`${detectionsRef.current} det/s`, width - 8, 32);
+        const detMs =
+          detectionsRef.current > 0
+            ? (1000 / detectionsRef.current).toFixed(2)
+            : '0.00';
+        ctx.fillText(`${detMs} ms`, width - 8, 48);
+        ctx.fillText(`${rafFpsRef.current.value} rAF`, width - 8, 64);
+        ctx.restore();
+      }
 
       rafId = requestAnimationFrame(draw);
     };
@@ -325,6 +435,7 @@ export function PitchGraph({
     isRecording,
     recordingStartAt,
     maxFps,
+    showDiagnostics,
   ]);
 
   return (
@@ -339,6 +450,51 @@ function mapMidiToY(midi: number, height: number) {
   const range = HIGHEST_NOTE - LOWEST_NOTE;
   const normalized = (HIGHEST_NOTE - clamped) / range;
   return normalized * height;
+}
+
+function drawStaticLayer(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  showNoteLines: boolean
+) {
+  if (showNoteLines) {
+    ctx.save();
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.4;
+
+    for (let midi = LOWEST_NOTE; midi <= HIGHEST_NOTE; midi += 1) {
+      if (midiToNoteIndex(midi) === 0) continue;
+      const y = mapMidiToY(midi, height);
+
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // Octave lines
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 1;
+
+  for (let octave = 2; octave <= 8; octave++) {
+    const midi = (octave + 1) * 12;
+    const y = mapMidiToY(midi, height);
+
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`C${octave}`, 6, y - 4);
+  }
 }
 
 function drawMarker(

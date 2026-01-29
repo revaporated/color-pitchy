@@ -12,14 +12,18 @@ type Options = {
   enabled: boolean;
   clarityThreshold: number; // 0.0 to 1.0
   fftSize?: number;
+  detectionRateHz?: number;
+  trackDetectionsPerSecond?: boolean;
 };
 
-const DETECTION_RATE_HZ = 165; // Main control for pitch detection rate
+const DEFAULT_DETECTION_RATE_HZ = 165;
 
 export function usePitchDetector({
   enabled,
   clarityThreshold,
   fftSize = 2048,
+  detectionRateHz = DEFAULT_DETECTION_RATE_HZ,
+  trackDetectionsPerSecond = true,
 }: Options) {
   const [sample, setSample] = useState<PitchSample>({
     timestamp: 0,
@@ -100,7 +104,7 @@ export function usePitchDetector({
             outputChannelCount: [1],
             processorOptions: {
               fftSize,
-              detectionRateHz: DETECTION_RATE_HZ,
+              detectionRateHz,
             },
           }
         );
@@ -122,16 +126,18 @@ export function usePitchDetector({
         workletNode.port.onmessage = (event) => {
           const { frequency, clarity, audioTime } = event.data ?? {};
           const now = performance.now();
-          detectionStatsRef.current.count += 1;
+          if (trackDetectionsPerSecond) {
+            detectionStatsRef.current.count += 1;
 
-          const elapsed = now - detectionStatsRef.current.lastTime;
-          if (elapsed >= 500) {
-            const rate = Math.round(
-              (detectionStatsRef.current.count * 1000) / elapsed
-            );
-            setDetectionsPerSecond(rate);
-            detectionStatsRef.current.count = 0;
-            detectionStatsRef.current.lastTime = now;
+            const elapsed = now - detectionStatsRef.current.lastTime;
+            if (elapsed >= 500) {
+              const rate = Math.round(
+                (detectionStatsRef.current.count * 1000) / elapsed
+              );
+              setDetectionsPerSecond(rate);
+              detectionStatsRef.current.count = 0;
+              detectionStatsRef.current.lastTime = now;
+            }
           }
 
           const hasPitch =
@@ -169,7 +175,19 @@ export function usePitchDetector({
       cancelled = true;
       cleanup();
     };
-  }, [enabled, clarityThreshold, fftSize]);
+  }, [
+    enabled,
+    clarityThreshold,
+    fftSize,
+    detectionRateHz,
+    trackDetectionsPerSecond,
+  ]);
+
+  useEffect(() => {
+    if (!trackDetectionsPerSecond) {
+      setDetectionsPerSecond(0);
+    }
+  }, [trackDetectionsPerSecond]);
 
   return { sample, error, detectionsPerSecond };
 }
