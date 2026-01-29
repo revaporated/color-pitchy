@@ -14,9 +14,13 @@ type Options = {
   fftSize?: number;
   detectionRateHz?: number;
   trackDetectionsPerSecond?: boolean;
+  minMidi?: number;
+  maxMidi?: number;
 };
 
 const DEFAULT_DETECTION_RATE_HZ = 165;
+const DEFAULT_MIN_MIDI = 36;
+const DEFAULT_MAX_MIDI = 96;
 
 export function usePitchDetector({
   enabled,
@@ -24,6 +28,8 @@ export function usePitchDetector({
   fftSize = 2048,
   detectionRateHz = DEFAULT_DETECTION_RATE_HZ,
   trackDetectionsPerSecond = true,
+  minMidi = DEFAULT_MIN_MIDI,
+  maxMidi = DEFAULT_MAX_MIDI,
 }: Options) {
   const [sample, setSample] = useState<PitchSample>({
     timestamp: 0,
@@ -146,7 +152,8 @@ export function usePitchDetector({
             clarity != null &&
             clarity >= clarityThreshold;
 
-          const midi = hasPitch ? frequencyToMidi(frequency) : null;
+          const rawMidi = hasPitch ? frequencyToMidi(frequency) : null;
+          const midi = (rawMidi !== null && rawMidi >= minMidi && rawMidi <= maxMidi) ? rawMidi : null;
           const timestamp =
             typeof audioTime === 'number'
               ? timeOffsetRef.current + audioTime * 1000
@@ -181,6 +188,8 @@ export function usePitchDetector({
     fftSize,
     detectionRateHz,
     trackDetectionsPerSecond,
+    minMidi,
+    maxMidi,
   ]);
 
   useEffect(() => {

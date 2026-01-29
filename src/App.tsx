@@ -20,6 +20,8 @@ export default function App() {
   const [showNoteLines, setShowNoteLines] = useState(false);
   const [showNoteTrails, setShowNoteTrails] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [minDetectableNote, setMinDetectableNote] = useState(36);
+  const [maxDetectableNote, setMaxDetectableNote] = useState(96);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsCollapsed, setControlsCollapsed] = useState(false);
   const [statsCollapsed, setStatsCollapsed] = useState(false);
@@ -32,6 +34,8 @@ export default function App() {
     fftSize,
     detectionRateHz: DETECTION_RATE_HZ,
     trackDetectionsPerSecond: showDiagnostics,
+    minMidi: minDetectableNote,
+    maxMidi: maxDetectableNote,
   });
   const {
     isRecording,
@@ -98,6 +102,10 @@ export default function App() {
             showNoteLines={showNoteLines}
             showNoteTrails={showNoteTrails}
             showDiagnostics={showDiagnostics}
+            minDetectableNote={minDetectableNote}
+            maxDetectableNote={maxDetectableNote}
+            setMinDetectableNote={setMinDetectableNote}
+            setMaxDetectableNote={setMaxDetectableNote}
             setEnabled={setEnabled}
             setClarityThreshold={setClarityThreshold}
             setHistoryDuration={setHistoryDuration}
@@ -149,6 +157,10 @@ export default function App() {
             showNoteLines={showNoteLines}
             showNoteTrails={showNoteTrails}
             showDiagnostics={showDiagnostics}
+            minDetectableNote={minDetectableNote}
+            maxDetectableNote={maxDetectableNote}
+            setMinDetectableNote={setMinDetectableNote}
+            setMaxDetectableNote={setMaxDetectableNote}
             setEnabled={setEnabled}
             setClarityThreshold={setClarityThreshold}
             setHistoryDuration={setHistoryDuration}

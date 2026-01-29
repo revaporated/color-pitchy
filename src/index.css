@@ -216,6 +216,11 @@ button:hover {
   margin-left: auto;
 }
 
+.controls-stack {
+  display: grid;
+  gap: 12px;
+}
+
 .control-action {
   width: 40px;
   height: 40px;

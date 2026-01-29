@@ -7,6 +7,7 @@ import {
   FiPlay,
   FiSettings,
 } from 'react-icons/fi';
+import { midiToNoteName } from '../utils/pitch';
 
 type Props = {
   enabled: boolean;
@@ -17,6 +18,8 @@ type Props = {
   showNoteLines: boolean;
   showNoteTrails: boolean;
   showDiagnostics: boolean;
+  minDetectableNote: number;
+  maxDetectableNote: number;
   setEnabled: Dispatch<SetStateAction<boolean>>;
   setClarityThreshold: Dispatch<SetStateAction<number>>;
   setHistoryDuration: Dispatch<SetStateAction<number>>;
@@ -25,6 +28,8 @@ type Props = {
   setShowNoteLines: Dispatch<SetStateAction<boolean>>;
   setShowNoteTrails: Dispatch<SetStateAction<boolean>>;
   setShowDiagnostics: Dispatch<SetStateAction<boolean>>;
+  setMinDetectableNote: Dispatch<SetStateAction<number>>;
+  setMaxDetectableNote: Dispatch<SetStateAction<number>>;
   isFullscreen?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -41,6 +46,8 @@ export function PitchControls({
   showNoteLines,
   showNoteTrails,
   showDiagnostics,
+  minDetectableNote,
+  maxDetectableNote,
   setEnabled,
   setClarityThreshold,
   setHistoryDuration,
@@ -49,6 +56,8 @@ export function PitchControls({
   setShowNoteLines,
   setShowNoteTrails,
   setShowDiagnostics,
+  setMinDetectableNote,
+  setMaxDetectableNote,
   isFullscreen = false,
   collapsed = false,
   onToggleCollapsed,
@@ -67,6 +76,20 @@ export function PitchControls({
 
   const adjustHistory = (delta: number) => {
     setHistoryDuration((value) => clamp(value + delta, 1, 10));
+  };
+
+  const adjustMinNote = (delta: number) => {
+    setMinDetectableNote((value) => {
+      const next = clamp(value + delta, 24, 84);
+      return next > maxDetectableNote ? maxDetectableNote : next;
+    });
+  };
+
+  const adjustMaxNote = (delta: number) => {
+    setMaxDetectableNote((value) => {
+      const next = clamp(value + delta, 84, 96);
+      return next < minDetectableNote ? minDetectableNote : next;
+    });
   };
 
   const adjustFft = (delta: number) => {
@@ -94,133 +117,189 @@ export function PitchControls({
             <FiSettings />
           </button>
         ) : (
-          <div className="controls-row">
-            <button
-              className="icon-button control-action"
-              onClick={() => setEnabled((value) => !value)}
-              aria-label={enabled ? 'Pause detection' : 'Start detection'}
-            >
-              {enabled ? <FiPause /> : <FiPlay />}
-            </button>
-
-            <div className="stepper-row">
-              <div className="stepper-text">
-                <span className="stepper-label">Clarity</span>
-                <span className="stepper-value">
-                  {Math.round(clarityThreshold * 100)}%
-                </span>
-              </div>
-              <div className="stepper-buttons">
-                <button
-                  className="icon-button"
-                  onClick={() => adjustClarity(0.01)}
-                  aria-label="Increase clarity threshold"
-                >
-                  <FiChevronUp />
-                </button>
-                <button
-                  className="icon-button"
-                  onClick={() => adjustClarity(-0.01)}
-                  aria-label="Decrease clarity threshold"
-                >
-                  <FiChevronDown />
-                </button>
-              </div>
-            </div>
-
-            <div className="stepper-row">
-              <div className="stepper-text">
-                <span className="stepper-label">FFT size</span>
-                <span className="stepper-value">{FFT_SIZES[fftIndex]}</span>
-              </div>
-              <div className="stepper-buttons">
-                <button
-                  className="icon-button"
-                  onClick={() => adjustFft(1)}
-                  aria-label="Increase FFT size"
-                >
-                  <FiChevronUp />
-                </button>
-                <button
-                  className="icon-button"
-                  onClick={() => adjustFft(-1)}
-                  aria-label="Decrease FFT size"
-                >
-                  <FiChevronDown />
-                </button>
-              </div>
-            </div>
-
-            <div className="stepper-row">
-              <div className="stepper-text">
-                <span className="stepper-label">History</span>
-                <span className="stepper-value">{historyDuration}s</span>
-              </div>
-              <div className="stepper-buttons">
-                <button
-                  className="icon-button"
-                  onClick={() => adjustHistory(1)}
-                  aria-label="Increase history duration"
-                >
-                  <FiChevronUp />
-                </button>
-                <button
-                  className="icon-button"
-                  onClick={() => adjustHistory(-1)}
-                  aria-label="Decrease history duration"
-                >
-                  <FiChevronDown />
-                </button>
-              </div>
-            </div>
-
-            <div className="toggle-row">
-              <span className="stepper-label">Color marker</span>
+          <div className="controls-stack">
+            <div className="controls-row">
               <button
-                onClick={() => setColorizeMarker((value) => !value)}
-                className="toggle-button"
+                className="icon-button control-action"
+                onClick={() => setEnabled((value) => !value)}
+                aria-label={enabled ? 'Pause detection' : 'Start detection'}
               >
-                {colorizeMarker ? 'On' : 'Off'}
+                {enabled ? <FiPause /> : <FiPlay />}
+              </button>
+
+              <div className="stepper-row">
+                <div className="stepper-text">
+                  <span className="stepper-label">Clarity</span>
+                  <span className="stepper-value">
+                    {Math.round(clarityThreshold * 100)}%
+                  </span>
+                </div>
+                <div className="stepper-buttons">
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustClarity(0.01)}
+                    aria-label="Increase clarity threshold"
+                  >
+                    <FiChevronUp />
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustClarity(-0.01)}
+                    aria-label="Decrease clarity threshold"
+                  >
+                    <FiChevronDown />
+                  </button>
+                </div>
+              </div>
+
+              <div className="stepper-row">
+                <div className="stepper-text">
+                  <span className="stepper-label">FFT size</span>
+                  <span className="stepper-value">{FFT_SIZES[fftIndex]}</span>
+                </div>
+                <div className="stepper-buttons">
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustFft(1)}
+                    aria-label="Increase FFT size"
+                  >
+                    <FiChevronUp />
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustFft(-1)}
+                    aria-label="Decrease FFT size"
+                  >
+                    <FiChevronDown />
+                  </button>
+                </div>
+              </div>
+
+              <div className="stepper-row">
+                <div className="stepper-text">
+                  <span className="stepper-label">History</span>
+                  <span className="stepper-value">{historyDuration}s</span>
+                </div>
+                <div className="stepper-buttons">
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustHistory(1)}
+                    aria-label="Increase history duration"
+                  >
+                    <FiChevronUp />
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustHistory(-1)}
+                    aria-label="Decrease history duration"
+                  >
+                    <FiChevronDown />
+                  </button>
+                </div>
+              </div>
+
+              <div className="toggle-row">
+                <span className="stepper-label">Color marker</span>
+                <button
+                  onClick={() => setColorizeMarker((value) => !value)}
+                  className="toggle-button"
+                >
+                  {colorizeMarker ? 'On' : 'Off'}
+                </button>
+              </div>
+
+              <div className="toggle-row">
+                <span className="stepper-label">Note lines</span>
+                <button
+                  onClick={() => setShowNoteLines((value) => !value)}
+                  className="toggle-button"
+                >
+                  {showNoteLines ? 'On' : 'Off'}
+                </button>
+              </div>
+
+              <div className="toggle-row">
+                <span className="stepper-label">Note trails</span>
+                <button
+                  onClick={() => setShowNoteTrails((value) => !value)}
+                  className="toggle-button"
+                >
+                  {showNoteTrails ? 'On' : 'Off'}
+                </button>
+              </div>
+
+              <div className="toggle-row">
+                <span className="stepper-label">Diagnostics</span>
+                <button
+                  onClick={() => setShowDiagnostics((value) => !value)}
+                  className="toggle-button"
+                >
+                  {showDiagnostics ? 'On' : 'Off'}
+                </button>
+              </div>
+
+              <button
+                className="icon-button card-hide"
+                onClick={() => onToggleCollapsed?.()}
+                aria-label="Hide controls"
+              >
+                <FiEyeOff />
               </button>
             </div>
 
-            <div className="toggle-row">
-              <span className="stepper-label">Note lines</span>
-              <button
-                onClick={() => setShowNoteLines((value) => !value)}
-                className="toggle-button"
-              >
-                {showNoteLines ? 'On' : 'Off'}
-              </button>
-            </div>
+            <div className="controls-row">
+              <div className="stepper-row">
+                <div className="stepper-text">
+                  <span className="stepper-label">Min detect</span>
+                  <span className="stepper-value">
+                    {midiToNoteName(minDetectableNote).note}
+                    {midiToNoteName(minDetectableNote).octave} ({minDetectableNote})
+                  </span>
+                </div>
+                <div className="stepper-buttons">
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustMinNote(1)}
+                    aria-label="Increase min detectable note"
+                  >
+                    <FiChevronUp />
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustMinNote(-1)}
+                    aria-label="Decrease min detectable note"
+                  >
+                    <FiChevronDown />
+                  </button>
+                </div>
+              </div>
 
-            <div className="toggle-row">
-              <span className="stepper-label">Note trails</span>
-              <button
-                onClick={() => setShowNoteTrails((value) => !value)}
-                className="toggle-button"
-              >
-                {showNoteTrails ? 'On' : 'Off'}
-              </button>
+              <div className="stepper-row">
+                <div className="stepper-text">
+                  <span className="stepper-label">Max detect</span>
+                  <span className="stepper-value">
+                    {midiToNoteName(maxDetectableNote).note}
+                    {midiToNoteName(maxDetectableNote).octave} ({maxDetectableNote})
+                  </span>
+                </div>
+                <div className="stepper-buttons">
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustMaxNote(1)}
+                    aria-label="Increase max detectable note"
+                  >
+                    <FiChevronUp />
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustMaxNote(-1)}
+                    aria-label="Decrease max detectable note"
+                  >
+                    <FiChevronDown />
+                  </button>
+                </div>
+              </div>
             </div>
-
-            <div className="toggle-row">
-              <span className="stepper-label">Diagnostics</span>
-              <button
-                onClick={() => setShowDiagnostics((value) => !value)}
-                className="toggle-button"
-              >
-                {showDiagnostics ? 'On' : 'Off'}
-              </button>
-            </div>
-
-            <button
-              className="icon-button card-hide"
-              onClick={() => onToggleCollapsed?.()}
-              aria-label="Hide controls"
-            >
-              <FiEyeOff />
-            </button>
           </div>
         )}
       </div>
@@ -307,6 +386,38 @@ export function PitchControls({
           onChange={(event) => setShowDiagnostics(event.target.checked)}
         />
         Diagnostics
+      </label>
+
+      <label>
+        Min detect: {midiToNoteName(minDetectableNote).note}{midiToNoteName(minDetectableNote).octave} ({minDetectableNote})
+        <input
+          type="range"
+          min={24}
+          max={84}
+          step={1}
+          value={minDetectableNote}
+          onChange={(event) => {
+            const val = parseInt(event.target.value, 10);
+            setMinDetectableNote(val);
+            if (val > maxDetectableNote) setMaxDetectableNote(val);
+          }}
+        />
+      </label>
+
+      <label>
+        Max detect: {midiToNoteName(maxDetectableNote).note}{midiToNoteName(maxDetectableNote).octave} ({maxDetectableNote})
+        <input
+          type="range"
+          min={84}
+          max={96}
+          step={1}
+          value={maxDetectableNote}
+          onChange={(event) => {
+            const val = parseInt(event.target.value, 10);
+            setMaxDetectableNote(val);
+            if (val < minDetectableNote) setMinDetectableNote(val);
+          }}
+        />
       </label>
     </div>
   );
