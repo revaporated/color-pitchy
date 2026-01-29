@@ -14,6 +14,8 @@ type Props = {
   height?: number;
   isRecording?: boolean;
   recordingStartAt?: number | null;
+  detectionsPerSecond?: number;
+  maxFps?: number;
 };
 
 export function PitchGraph({
@@ -25,15 +27,54 @@ export function PitchGraph({
   height,
   isRecording = false,
   recordingStartAt = null,
+  detectionsPerSecond = 0,
+  maxFps = 165,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const historyRef = useRef<PitchSample[]>([]);
   const sampleRef = useRef<PitchSample>(sample);
   const sizeRef = useRef({ width: 800, height: height ?? 320 });
+  const fpsRef = useRef({
+    lastTime: performance.now(),
+    frames: 0,
+    value: 0,
+  });
+  const rafFpsRef = useRef({
+    lastTime: performance.now(),
+    frames: 0,
+    value: 0,
+  });
+  const detectionsRef = useRef(detectionsPerSecond);
+  const lastDrawRef = useRef(0);
 
   useEffect(() => {
     sampleRef.current = sample;
   }, [sample]);
+
+  useEffect(() => {
+    detectionsRef.current = detectionsPerSecond;
+  }, [detectionsPerSecond]);
+
+  // Frame rate diagnostic for requestAnimationFrame
+  useEffect(() => {
+    let rafId = 0;
+    const tick = () => {
+      const now = performance.now();
+      rafFpsRef.current.frames += 1;
+      const elapsed = now - rafFpsRef.current.lastTime;
+      if (elapsed >= 500) {
+        rafFpsRef.current.value = Math.round(
+          (rafFpsRef.current.frames * 1000) / elapsed
+        );
+        rafFpsRef.current.frames = 0;
+        rafFpsRef.current.lastTime = now;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
 
   useEffect(() => {
     const now = sample.timestamp || performance.now();
@@ -81,6 +122,16 @@ export function PitchGraph({
 
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
+
+      const now = performance.now();
+      if (Number.isFinite(maxFps) && maxFps > 0) {
+        const minFrameMs = 1000 / maxFps;
+        if (now - lastDrawRef.current < minFrameMs) {
+          rafId = requestAnimationFrame(draw);
+          return;
+        }
+        lastDrawRef.current = now;
+      }
 
       const { width, height: h } = sizeRef.current;
       const dpr = window.devicePixelRatio || 1;
@@ -132,7 +183,6 @@ export function PitchGraph({
         ctx.fillText(`C${octave}`, 6, y - 4);
       }
 
-      const now = performance.now();
       const pixelsPerMs = width / (historyDuration * 1000);
 
       if (showNoteTrails) {
@@ -237,6 +287,30 @@ export function PitchGraph({
         ctx.fillText(formatNoteLabel(current.midi), width - 10, y - 10);
       }
 
+      fpsRef.current.frames += 1;
+      const fpsElapsed = now - fpsRef.current.lastTime;
+      if (fpsElapsed >= 500) {
+        fpsRef.current.value = Math.round(
+          (fpsRef.current.frames * 1000) / fpsElapsed
+        );
+        fpsRef.current.frames = 0;
+        fpsRef.current.lastTime = now;
+      }
+
+      ctx.save();
+      ctx.fillStyle = '#0f172a';
+      ctx.font = '12px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${fpsRef.current.value} FPS`, width - 8, 16);
+      ctx.fillText(`${detectionsRef.current} det/s`, width - 8, 32);
+      const detMs =
+        detectionsRef.current > 0
+          ? (1000 / detectionsRef.current).toFixed(2)
+          : '0.00';
+      ctx.fillText(`${detMs} ms`, width - 8, 48);
+      ctx.fillText(`${rafFpsRef.current.value} rAF`, width - 8, 64);
+      ctx.restore();
+
       rafId = requestAnimationFrame(draw);
     };
 
@@ -250,6 +324,7 @@ export function PitchGraph({
     showNoteTrails,
     isRecording,
     recordingStartAt,
+    maxFps,
   ]);
 
   return (

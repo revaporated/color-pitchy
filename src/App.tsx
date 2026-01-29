@@ -8,6 +8,8 @@ import { PitchStats } from './components/PitchStats';
 import { RecordingControls } from './components/RecordingControls';
 import './index.css';
 
+const GRAPH_MAX_FPS = 165; // Main control for pitch graph animation frame rate
+
 export default function App() {
   const [enabled, setEnabled] = useState(false);
   const [clarityThreshold, setClarityThreshold] = useState(0.9);
@@ -22,7 +24,7 @@ export default function App() {
   const appRef = useRef<HTMLDivElement>(null);
   const graphCardRef = useRef<HTMLDivElement>(null);
 
-  const { sample, error } = usePitchDetector({
+  const { sample, error, detectionsPerSecond } = usePitchDetector({
     enabled,
     clarityThreshold,
     fftSize,
@@ -56,6 +58,8 @@ export default function App() {
           showNoteTrails={showNoteTrails}
           isRecording={isRecording}
           recordingStartAt={recordingStartAt}
+          maxFps={GRAPH_MAX_FPS}
+          detectionsPerSecond={detectionsPerSecond}
         />
       </div>
       <div className="graph-actions">
