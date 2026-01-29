@@ -11,6 +11,7 @@ export type PitchSample = {
 type Options = {
   enabled: boolean;
   clarityThreshold: number; // 0.0 to 1.0
+  centsThreshold: number; // 0 to 50
   fftSize?: number;
   detectionRateHz?: number;
   trackDetectionsPerSecond?: boolean;
@@ -25,6 +26,7 @@ const DEFAULT_MAX_MIDI = 96;
 export function usePitchDetector({
   enabled,
   clarityThreshold,
+  centsThreshold,
   fftSize = 2048,
   detectionRateHz = DEFAULT_DETECTION_RATE_HZ,
   trackDetectionsPerSecond = true,
@@ -153,7 +155,16 @@ export function usePitchDetector({
             clarity >= clarityThreshold;
 
           const rawMidi = hasPitch ? frequencyToMidi(frequency) : null;
-          const midi = (rawMidi !== null && rawMidi >= minMidi && rawMidi <= maxMidi) ? rawMidi : null;
+          let midi = (rawMidi !== null && rawMidi >= minMidi && rawMidi <= maxMidi) ? rawMidi : null;
+
+          if (midi !== null) {
+            const nearestMidi = Math.round(midi);
+            const centsOffset = Math.abs(midi - nearestMidi) * 100;
+            if (centsOffset > centsThreshold) {
+              midi = null;
+            }
+          }
+
           const timestamp =
             typeof audioTime === 'number'
               ? timeOffsetRef.current + audioTime * 1000
@@ -185,6 +196,7 @@ export function usePitchDetector({
   }, [
     enabled,
     clarityThreshold,
+    centsThreshold,
     fftSize,
     detectionRateHz,
     trackDetectionsPerSecond,

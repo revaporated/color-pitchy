@@ -22,6 +22,7 @@ export default function App() {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [minDetectableNote, setMinDetectableNote] = useState(36);
   const [maxDetectableNote, setMaxDetectableNote] = useState(96);
+  const [centsThreshold, setCentsThreshold] = useState(25);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [controlsCollapsed, setControlsCollapsed] = useState(false);
   const [statsCollapsed, setStatsCollapsed] = useState(false);
@@ -31,6 +32,7 @@ export default function App() {
   const { sample, error, detectionsPerSecond } = usePitchDetector({
     enabled,
     clarityThreshold,
+    centsThreshold,
     fftSize,
     detectionRateHz: DETECTION_RATE_HZ,
     trackDetectionsPerSecond: showDiagnostics,
@@ -96,6 +98,7 @@ export default function App() {
           <PitchControls
             enabled={enabled}
             clarityThreshold={clarityThreshold}
+            centsThreshold={centsThreshold}
             historyDuration={historyDuration}
             fftSize={fftSize}
             colorizeMarker={colorizeMarker}
@@ -106,6 +109,7 @@ export default function App() {
             maxDetectableNote={maxDetectableNote}
             setMinDetectableNote={setMinDetectableNote}
             setMaxDetectableNote={setMaxDetectableNote}
+            setCentsThreshold={setCentsThreshold}
             setEnabled={setEnabled}
             setClarityThreshold={setClarityThreshold}
             setHistoryDuration={setHistoryDuration}
@@ -151,6 +155,7 @@ export default function App() {
           <PitchControls
             enabled={enabled}
             clarityThreshold={clarityThreshold}
+            centsThreshold={centsThreshold}
             historyDuration={historyDuration}
             fftSize={fftSize}
             colorizeMarker={colorizeMarker}
@@ -161,6 +166,7 @@ export default function App() {
             maxDetectableNote={maxDetectableNote}
             setMinDetectableNote={setMinDetectableNote}
             setMaxDetectableNote={setMaxDetectableNote}
+            setCentsThreshold={setCentsThreshold}
             setEnabled={setEnabled}
             setClarityThreshold={setClarityThreshold}
             setHistoryDuration={setHistoryDuration}

@@ -12,6 +12,7 @@ import { midiToNoteName } from '../utils/pitch';
 type Props = {
   enabled: boolean;
   clarityThreshold: number;
+  centsThreshold: number;
   historyDuration: number;
   fftSize: number;
   colorizeMarker: boolean;
@@ -22,6 +23,7 @@ type Props = {
   maxDetectableNote: number;
   setEnabled: Dispatch<SetStateAction<boolean>>;
   setClarityThreshold: Dispatch<SetStateAction<number>>;
+  setCentsThreshold: Dispatch<SetStateAction<number>>;
   setHistoryDuration: Dispatch<SetStateAction<number>>;
   setFftSize: Dispatch<SetStateAction<number>>;
   setColorizeMarker: Dispatch<SetStateAction<boolean>>;
@@ -40,6 +42,7 @@ const FFT_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384] as const;
 export function PitchControls({
   enabled,
   clarityThreshold,
+  centsThreshold,
   historyDuration,
   fftSize,
   colorizeMarker,
@@ -50,6 +53,7 @@ export function PitchControls({
   maxDetectableNote,
   setEnabled,
   setClarityThreshold,
+  setCentsThreshold,
   setHistoryDuration,
   setFftSize,
   setColorizeMarker,
@@ -76,6 +80,10 @@ export function PitchControls({
 
   const adjustHistory = (delta: number) => {
     setHistoryDuration((value) => clamp(value + delta, 1, 10));
+  };
+
+  const adjustCentsThreshold = (delta: number) => {
+    setCentsThreshold((value) => clamp(value + delta, 5, 49));
   };
 
   const adjustMinNote = (delta: number) => {
@@ -299,6 +307,29 @@ export function PitchControls({
                   </button>
                 </div>
               </div>
+
+              <div className="stepper-row">
+                <div className="stepper-text">
+                  <span className="stepper-label">Cents threshold</span>
+                  <span className="stepper-value">±{centsThreshold}c</span>
+                </div>
+                <div className="stepper-buttons">
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustCentsThreshold(1)}
+                    aria-label="Increase cents threshold"
+                  >
+                    <FiChevronUp />
+                  </button>
+                  <button
+                    className="icon-button"
+                    onClick={() => adjustCentsThreshold(-1)}
+                    aria-label="Decrease cents threshold"
+                  >
+                    <FiChevronDown />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -348,6 +379,20 @@ export function PitchControls({
           value={historyDuration}
           onChange={(event) =>
             setHistoryDuration(parseInt(event.target.value, 10))
+          }
+        />
+      </label>
+
+      <label>
+        Cents threshold: ±{centsThreshold}c
+        <input
+          type="range"
+          min={5}
+          max={49}
+          step={1}
+          value={centsThreshold}
+          onChange={(event) =>
+            setCentsThreshold(parseInt(event.target.value, 10))
           }
         />
       </label>
