@@ -33,6 +33,8 @@ export const WaveformViewer = ({
 }: Props) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const playheadRef = useRef<HTMLDivElement>(null)
+  const hoverLineRef = useRef<HTMLDivElement>(null)
+  const hoverOffsetRef = useRef<number | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const rafRef = useRef<number | null>(null)
 
@@ -41,6 +43,7 @@ export const WaveformViewer = ({
     [audioBuffer],
   )
   const waveformWidth = peaks?.length ?? 0
+  const hasWaveform = Boolean(peaks)
   const markers = useMemo(() => {
     if (!duration || waveformWidth === 0) return []
 
@@ -65,6 +68,31 @@ export const WaveformViewer = ({
     return items
   }, [duration, waveformWidth])
 
+  const updateHoverLine = useCallback(
+    (nextOffsetX?: number) => {
+      const viewport = viewportRef.current
+      const hoverLine = hoverLineRef.current
+      if (!viewport || !hoverLine || waveformWidth === 0) return
+
+      const viewportWidth = viewport.clientWidth
+      const offsetX = nextOffsetX ?? hoverOffsetRef.current
+      if (offsetX === null || offsetX === undefined) {
+        hoverLine.style.opacity = '0'
+        return
+      }
+
+      const clampedOffsetX = Math.max(0, Math.min(offsetX, viewportWidth))
+      hoverOffsetRef.current = clampedOffsetX
+      const absoluteX = viewport.scrollLeft + clampedOffsetX
+      const maxLeft = Math.max(0, waveformWidth - 1)
+      const clampedLeft = Math.max(0, Math.min(absoluteX, maxLeft))
+
+      hoverLine.style.left = `${clampedLeft}px`
+      hoverLine.style.opacity = '1'
+    },
+    [waveformWidth],
+  )
+
   const scrollToTime = useCallback(
     (time: number) => {
       const viewport = viewportRef.current
@@ -84,8 +112,10 @@ export const WaveformViewer = ({
         const compensatedLeft = playheadLeft + clamped
         playhead.style.left = `${compensatedLeft}px`
       }
+
+      updateHoverLine()
     },
-    [waveformWidth],
+    [updateHoverLine, waveformWidth],
   )
 
   useEffect(() => {
@@ -181,7 +211,23 @@ export const WaveformViewer = ({
     scrollToTime(clampedTime)
   }
 
-  const hasWaveform = Boolean(peaks)
+  const handleWaveformMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!hasWaveform) return
+    const viewport = viewportRef.current
+    if (!viewport) return
+
+    const rect = viewport.getBoundingClientRect()
+    const offsetX = event.clientX - rect.left
+    updateHoverLine(offsetX)
+  }
+
+  const handleWaveformLeave = () => {
+    hoverOffsetRef.current = null
+    const hoverLine = hoverLineRef.current
+    if (hoverLine) {
+      hoverLine.style.opacity = '0'
+    }
+  }
 
   return (
     <div
@@ -190,6 +236,8 @@ export const WaveformViewer = ({
       }`}
       ref={viewportRef}
       onClick={handleWaveformClick}
+      onMouseMove={handleWaveformMove}
+      onMouseLeave={handleWaveformLeave}
     >
       {hasWaveform ? (
         <>
@@ -215,6 +263,7 @@ export const WaveformViewer = ({
       ) : (
         <div className="waveform-placeholder">Upload an MP3 to see the waveform.</div>
       )}
+      <div ref={hoverLineRef} className="waveform-hover-line" aria-hidden="true" />
       <div ref={playheadRef} className="waveform-playhead" aria-hidden="true" />
     </div>
   )

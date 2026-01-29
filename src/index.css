@@ -400,6 +400,19 @@ button:hover {
   padding: 0 16px;
 }
 
+.waveform-hover-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: rgba(248, 250, 252, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2;
+  transition: opacity 120ms ease;
+}
+
 .waveform-playhead {
   position: absolute;
   top: 0;
