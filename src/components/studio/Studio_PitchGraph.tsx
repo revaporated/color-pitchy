@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { PitchSample } from '../../hooks/usePitchDetector';
 import { formatNoteLabel, midiToNoteIndex, PITCH_COLOR_SHAPE_MAP } from '../../utils/pitch';
+import { PIXELS_PER_SECOND, PLAYHEAD_WIDTH } from '../../utils/waveform';
 
 const LOWEST_NOTE = 36; // C2
 const HIGHEST_NOTE = 96; // C8
@@ -18,7 +19,12 @@ type Props = {
   colorizeMarker: boolean;
   showNoteLines: boolean;
   showNoteTrails: boolean;
+  currentTime: number;
+  duration: number;
+  isPlaying: boolean;
   height?: number;
+  pixelsPerSecond?: number;
+  resetKey?: number;
   isRecording?: boolean;
   recordingStartAt?: number | null;
   detectionsPerSecond?: number;
@@ -33,7 +39,12 @@ export function PitchGraph({
   colorizeMarker,
   showNoteLines,
   showNoteTrails,
+  currentTime,
+  duration,
+  isPlaying,
   height,
+  pixelsPerSecond = PIXELS_PER_SECOND,
+  resetKey,
   isRecording = false,
   recordingStartAt = null,
   detectionsPerSecond = 0,
@@ -50,6 +61,12 @@ export function PitchGraph({
   });
   const detectionRateRef = useRef(detectionRateHz || maxFps);
   const sampleRef = useRef<PitchSample>(sample);
+  const currentTimeRef = useRef(currentTime);
+  const durationRef = useRef(duration);
+  const isPlayingRef = useRef(isPlaying);
+  const pixelsPerSecondRef = useRef(pixelsPerSecond);
+  const playbackTimeRef = useRef(currentTime * 1000);
+  const lastPlaybackFrameRef = useRef<number | null>(null);
   const sizeRef = useRef({ width: 800, height: height ?? 320 });
   const fpsRef = useRef({
     lastTime: performance.now(),
@@ -75,6 +92,46 @@ export function PitchGraph({
   useEffect(() => {
     sampleRef.current = sample;
   }, [sample]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  useEffect(() => {
+    pixelsPerSecondRef.current = pixelsPerSecond;
+  }, [pixelsPerSecond]);
+
+  useEffect(() => {
+    const nextTimeMs = currentTime * 1000;
+    if (!isPlaying) {
+      playbackTimeRef.current = nextTimeMs;
+      lastPlaybackFrameRef.current = null;
+      return;
+    }
+    const drift = Math.abs(nextTimeMs - playbackTimeRef.current);
+    if (drift > 1000) {
+      playbackTimeRef.current = nextTimeMs;
+      lastPlaybackFrameRef.current = null;
+    }
+  }, [currentTime, isPlaying]);
+
+  useEffect(() => {
+    if (resetKey === undefined) return;
+    const history = historyRef.current;
+    history.data.fill(null);
+    history.head = 0;
+    history.count = 0;
+    playbackTimeRef.current = currentTimeRef.current * 1000;
+    lastPlaybackFrameRef.current = null;
+  }, [resetKey]);
 
   useEffect(() => {
     detectionsRef.current = detectionsPerSecond;
@@ -113,6 +170,24 @@ export function PitchGraph({
     };
   };
 
+  const getPlayheadX = (width: number, timeSeconds: number) => {
+    if (!Number.isFinite(width) || width <= 0) return 0;
+    const totalDuration = durationRef.current;
+    const pps = pixelsPerSecondRef.current;
+    if (!Number.isFinite(pps) || pps <= 0) return 0;
+
+    const time = timeSeconds;
+    const clampedTime =
+      totalDuration > 0 ? Math.min(Math.max(time, 0), totalDuration) : Math.max(time, 0);
+    const waveformWidth = Math.max(1, totalDuration * pps);
+    const maxScroll = Math.max(0, waveformWidth - width);
+    const targetLeft = clampedTime * pps - width / 2;
+    const scrollLeft = Math.max(0, Math.min(targetLeft, maxScroll));
+    const rawPlayheadLeft = clampedTime * pps - scrollLeft;
+    const maxPlayheadLeft = Math.max(0, width - PLAYHEAD_WIDTH);
+    return Math.max(0, Math.min(rawPlayheadLeft, maxPlayheadLeft));
+  };
+
   useEffect(() => {
     const rate = detectionRateRef.current || 1;
     const capacity = Math.max(1, Math.ceil(rate * historyDuration));
@@ -148,7 +223,7 @@ export function PitchGraph({
       resizeHistoryBuffer(Math.max(1, Math.ceil(rate * historyDuration)));
     }
 
-    const now = sample.timestamp || performance.now();
+    const now = playbackTimeRef.current;
     const nextIndex = history.head;
     const entry = history.data[nextIndex];
     if (entry) {
@@ -209,6 +284,17 @@ export function PitchGraph({
       if (!ctx) return;
 
       const now = performance.now();
+      if (isPlayingRef.current) {
+        if (lastPlaybackFrameRef.current === null) {
+          lastPlaybackFrameRef.current = now;
+        }
+        const delta = now - lastPlaybackFrameRef.current;
+        lastPlaybackFrameRef.current = now;
+        playbackTimeRef.current += delta;
+      } else {
+        lastPlaybackFrameRef.current = null;
+      }
+
       if (Number.isFinite(maxFps) && maxFps > 0) {
         const minFrameMs = 1000 / maxFps;
         if (now - lastDrawRef.current < minFrameMs) {
@@ -219,6 +305,11 @@ export function PitchGraph({
       }
 
       const { width, height: h } = sizeRef.current;
+      const timelineNow = playbackTimeRef.current;
+      const playheadTimeSeconds = isPlayingRef.current
+        ? playbackTimeRef.current / 1000
+        : currentTimeRef.current;
+      const playheadX = getPlayheadX(width, playheadTimeSeconds);
       const dpr = window.devicePixelRatio || 1;
       const pixelWidth = Math.max(1, Math.round(width * dpr));
       const pixelHeight = Math.max(1, Math.round(h * dpr));
@@ -287,14 +378,14 @@ export function PitchGraph({
         for (let i = 0; i < historyCount; i += 1) {
           const s = history.data[(historyStartIndex + i) % historyCapacity];
           if (!s || s.midi == null) continue;
-          if (now - s.timestamp > historyDuration * 1000) continue;
+          if (timelineNow - s.timestamp > historyDuration * 1000) continue;
 
           const noteMidi = Math.round(s.midi);
           const noteIndex = midiToNoteIndex(noteMidi);
           const { rgb } = PITCH_COLOR_SHAPE_MAP[noteIndex];
           ctx.fillStyle = `rgb(${rgb})`;
 
-          const x = width - (now - s.timestamp) * pixelsPerMs;
+          const x = playheadX - (timelineNow - s.timestamp) * pixelsPerMs;
           const next =
             i + 1 < historyCount
               ? history.data[(historyStartIndex + i + 1) % historyCapacity]
@@ -302,10 +393,10 @@ export function PitchGraph({
           const hasNext =
             next != null &&
             next.midi != null &&
-            now - next.timestamp <= historyDuration * 1000;
+            timelineNow - next.timestamp <= historyDuration * 1000;
           const nextX =
             hasNext
-              ? width - (now - next.timestamp) * pixelsPerMs
+              ? playheadX - (timelineNow - next.timestamp) * pixelsPerMs
               : x + minSegmentWidth;
           const startX = Math.min(x, nextX);
           const endX = Math.max(x, nextX);
@@ -327,7 +418,7 @@ export function PitchGraph({
       }
 
       if (isRecording && recordingStartAt != null) {
-        const markerX = width - (now - recordingStartAt) * pixelsPerMs;
+        const markerX = playheadX - (timelineNow - recordingStartAt) * pixelsPerMs;
 
         if (markerX >= 0 && markerX <= width) {
           ctx.save();
@@ -356,12 +447,12 @@ export function PitchGraph({
             continue;
           }
 
-          if (now - s.timestamp > historyDuration * 1000) {
+          if (timelineNow - s.timestamp > historyDuration * 1000) {
             drawing = false;
             continue;
           }
 
-          const x = width - (now - s.timestamp) * pixelsPerMs;
+          const x = playheadX - (timelineNow - s.timestamp) * pixelsPerMs;
           if (x < 0) continue;
 
           const y = mapMidiToY(s.midi, h);
@@ -376,11 +467,23 @@ export function PitchGraph({
       }
       ctx.stroke();
 
+      if (Number.isFinite(playheadX)) {
+        ctx.save();
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.moveTo(playheadX, 0);
+        ctx.lineTo(playheadX, h);
+        ctx.stroke();
+        ctx.restore();
+      }
+
       // Current point
       const current = sampleRef.current;
       if (current.midi != null) {
         const y = mapMidiToY(current.midi, h);
-        const x = width - 2;
+        const x = playheadX;
 
         const noteIndex = midiToNoteIndex(current.midi);
         const pitchStyle = PITCH_COLOR_SHAPE_MAP[noteIndex];
@@ -392,7 +495,8 @@ export function PitchGraph({
         ctx.fillStyle = '#0f172a';
         ctx.font = 'bold 13px sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText(formatNoteLabel(current.midi), width - 10, y - 10);
+        const labelX = Math.max(10, playheadX - 10);
+        ctx.fillText(formatNoteLabel(current.midi), labelX, y - 10);
       }
 
       if (showDiagnostics) {

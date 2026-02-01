@@ -21,6 +21,7 @@ type Props = {
   isPlaying: boolean
   currentTime: number
   onSeek: (time: number) => void
+  onWaveformClick?: (time: number) => void
   viewMode: 'pan' | 'select'
   panMode: 'scroll' | 'scrub'
   selection: { start: number; end: number } | null
@@ -34,6 +35,7 @@ export const WaveformViewer = ({
   isPlaying,
   currentTime,
   onSeek,
+  onWaveformClick,
   viewMode,
   panMode,
   selection,
@@ -299,6 +301,7 @@ export const WaveformViewer = ({
 
     onSeek(clampedTime)
     scrollToTime(clampedTime)
+    onWaveformClick?.(clampedTime)
   }
 
   const handleWaveformMove = (event: React.MouseEvent<HTMLDivElement>) => {

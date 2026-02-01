@@ -7,6 +7,7 @@ import { PitchGraph as Studio_PitchGraph } from '../components/studio/Studio_Pit
 import { useAudioFile } from '../hooks/useAudioFile';
 import { useAudioPlayback } from '../hooks/useAudioPlayback';
 import { usePitchDetector } from '../hooks/usePitchDetector';
+import { PIXELS_PER_SECOND } from '../utils/waveform';
 
 /**
  * Studio Mode (Experimental)
@@ -24,21 +25,6 @@ export default function StudioPage() {
     handleFileChange,
   } = useAudioFile()
 
-  // Pitch Detection
-  const [pitchEnabled] = useState(true);
-  const [clarityThreshold] = useState(0.85);
-  const [centsThreshold] = useState(40);
-  const [historyDuration] = useState(10);
-  const [colorizeMarker] = useState(true);
-  const [showNoteLines] = useState(true);
-  const [showNoteTrails] = useState(true);
-
-  const { sample } = usePitchDetector({
-    enabled: pitchEnabled,
-    clarityThreshold,
-    centsThreshold,
-  });
-
   const handlePlayError = useCallback(() => {
     setError('Unable to start playback.')
   }, [setError])
@@ -48,20 +34,45 @@ export default function StudioPage() {
       onPlayError: handlePlayError,
     })
 
+  // Pitch Detection
+  const historyDuration = 10
+  const clarityThreshold = 0.85
+  const centsThreshold = 40
+  const colorizeMarker = true
+  const showNoteLines = false
+  const showNoteTrails = true
+
+  const { sample } = usePitchDetector({
+    enabled: isPlaying,
+    clarityThreshold,
+    centsThreshold,
+  })
+
+  const [pitchResetKey, setPitchResetKey] = useState(0)
+
   const [viewMode, setViewMode] = useState<'pan' | 'select'>('pan')
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(
     null,
   )
 
+  const handleStop = useCallback(() => {
+    stop()
+    setPitchResetKey((value) => value + 1)
+  }, [stop])
+
+  const handleWaveformClick = useCallback(() => {
+    setPitchResetKey((value) => value + 1)
+  }, [])
+
   const handleUpload = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      stop()
+      handleStop()
       setSelection(null)
       setLoopEnabled(false)
       handleFileChange(event)
     },
-    [handleFileChange, stop],
+    [handleFileChange, handleStop],
   )
 
   const hasAudio = Boolean(audioUrl && audioBuffer)
@@ -129,8 +140,13 @@ export default function StudioPage() {
           colorizeMarker={colorizeMarker}
           showNoteLines={showNoteLines}
           showNoteTrails={showNoteTrails}
+          currentTime={currentTime}
+          duration={duration}
+          isPlaying={isPlaying}
+          pixelsPerSecond={PIXELS_PER_SECOND}
+          resetKey={pitchResetKey}
           showDiagnostics={false}
-          height={500}
+          height={450}
         />
 
         <Studio_WaveformViewer
@@ -140,6 +156,7 @@ export default function StudioPage() {
           isPlaying={isPlaying}
           currentTime={currentTime}
           onSeek={seek}
+          onWaveformClick={handleWaveformClick}
           viewMode={viewMode}
           panMode="scroll"
           selection={selection}
@@ -155,7 +172,7 @@ export default function StudioPage() {
           loopEnabled={loopEnabled}
           hasSelection={Boolean(selection)}
           onPlayPause={handlePlayPause}
-          onStop={stop}
+          onStop={handleStop}
           onViewModeChange={setViewMode}
           onToggleLoop={() => setLoopEnabled((value) => !value)}
           onClearSelection={handleSelectionClear}
