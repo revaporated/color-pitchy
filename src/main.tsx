@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import SongsPage from './pages/Songs'
+import StudioPage from './pages/Studio' // 1. Import the Studio page
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -11,6 +12,7 @@ createRoot(document.getElementById('root')!).render(
       <Routes>
         <Route path="/" element={<App />} />
         <Route path="/songs" element={<SongsPage />} />
+        <Route path="/studio" element={<StudioPage />} /> {/* 2. Add the route */}
       </Routes>
     </BrowserRouter>
   </StrictMode>,

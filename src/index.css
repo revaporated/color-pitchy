@@ -337,8 +337,8 @@ button:hover {
   position: relative;
   height: 160px;
   overflow: hidden;
-  border-top-left-radius: 12px;
-  border-top-right-radius: 12px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   border: 2px solid #e2e8f0;
@@ -510,4 +510,35 @@ button:hover {
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.nav-header nav {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.nav-header a {
+  text-decoration: none;
+  color: #64748b;
+  font-weight: 500;
+  transition: color 0.2s;
+  padding-bottom: 4px;
+}
+
+.nav-header a:hover {
+  color: #1e293b;
+}
+
+.nav-header a.active {
+  color: #0f172a;
+  border-bottom: 2px solid #0f172a;
+}
+
+.placeholder-content {
+  margin-top: 2rem;
+  padding: 3rem;
+  border: 2px dashed #e2e8f0;
+  border-radius: 12px;
+  text-align: center;
+  color: #94a3b8;
 }
