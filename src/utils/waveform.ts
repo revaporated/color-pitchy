@@ -1,4 +1,4 @@
-export const PIXELS_PER_SECOND = 92 // 920px viewer width / 92 = 10 seconds
+export const PIXELS_PER_SECOND = 140.6 // 1406px viewer width / 10 seconds = 140.6px/second
 export const WAVEFORM_HEIGHT = 140
 export const PLAYHEAD_WIDTH = 2
 
