@@ -22,6 +22,7 @@ type Props = {
   currentTime: number
   onSeek: (time: number) => void
   onWaveformClick?: (time: number) => void
+  onHoverTimeChange?: (time: number | null) => void
   viewMode: 'pan' | 'select'
   panMode: 'scroll' | 'scrub'
   selection: { start: number; end: number } | null
@@ -36,6 +37,7 @@ export const WaveformViewer = ({
   currentTime,
   onSeek,
   onWaveformClick,
+  onHoverTimeChange,
   viewMode,
   panMode,
   selection,
@@ -137,6 +139,19 @@ export const WaveformViewer = ({
     const maxTime = getMaxTime()
     return Math.max(0, Math.min(time, maxTime))
   }
+
+  const calculateHoverTime = useCallback(
+    (offsetX: number) => {
+      const viewport = viewportRef.current
+      if (!viewport || waveformWidth === 0) return null
+
+      const absoluteX = viewport.scrollLeft + offsetX
+      const hoverTime = absoluteX / PIXELS_PER_SECOND
+      const maxTime = duration || audioRef.current?.duration || 0
+      return Math.max(0, Math.min(hoverTime, maxTime))
+    },
+    [duration, audioRef, waveformWidth],
+  )
 
   const getPointerPosition = (event: React.PointerEvent<HTMLDivElement>) => {
     const viewport = viewportRef.current
@@ -256,6 +271,13 @@ export const WaveformViewer = ({
       const audio = audioRef.current
       if (!audio) return
       scrollToTime(audio.currentTime)
+
+      // Also update hover time during playback since the waveform scrolls under the cursor
+      if (hoverOffsetRef.current !== null) {
+        const hoverTime = calculateHoverTime(hoverOffsetRef.current)
+        onHoverTimeChange?.(hoverTime)
+      }
+
       rafRef.current = requestAnimationFrame(update)
     }
 
@@ -267,7 +289,7 @@ export const WaveformViewer = ({
         rafRef.current = null
       }
     }
-  }, [audioRef, isPlaying, scrollToTime])
+  }, [audioRef, isPlaying, scrollToTime, calculateHoverTime, onHoverTimeChange])
 
   useEffect(() => {
     const handleResize = () => {
@@ -312,6 +334,9 @@ export const WaveformViewer = ({
     const rect = viewport.getBoundingClientRect()
     const offsetX = event.clientX - rect.left
     updateHoverLine(offsetX)
+
+    const hoverTime = calculateHoverTime(offsetX)
+    onHoverTimeChange?.(hoverTime)
   }
 
   const handleWaveformLeave = () => {
@@ -320,6 +345,7 @@ export const WaveformViewer = ({
     if (hoverLine) {
       hoverLine.style.opacity = '0'
     }
+    onHoverTimeChange?.(null)
   }
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {

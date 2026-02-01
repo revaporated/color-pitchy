@@ -55,6 +55,7 @@ export default function StudioPage() {
   const [selection, setSelection] = useState<{ start: number; end: number } | null>(
     null,
   )
+  const [hoverTime, setHoverTime] = useState<number | null>(null)
 
   const handleStop = useCallback(() => {
     stop()
@@ -157,6 +158,7 @@ export default function StudioPage() {
           currentTime={currentTime}
           onSeek={seek}
           onWaveformClick={handleWaveformClick}
+          onHoverTimeChange={setHoverTime}
           viewMode={viewMode}
           panMode="scroll"
           selection={selection}
@@ -168,6 +170,7 @@ export default function StudioPage() {
           hasAudio={hasAudio}
           currentTime={currentTime}
           duration={duration}
+          hoverTime={hoverTime}
           viewMode={viewMode}
           loopEnabled={loopEnabled}
           hasSelection={Boolean(selection)}

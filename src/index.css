@@ -328,6 +328,11 @@ button:hover {
   color: #64748b;
 }
 
+.hover-timecode {
+  color: #94a3b8;
+  font-style: italic;
+}
+
 .waveform-card {
   display: grid;
   gap: 12px;

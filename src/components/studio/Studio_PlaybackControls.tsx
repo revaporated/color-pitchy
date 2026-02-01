@@ -6,6 +6,7 @@ type Props = {
   hasAudio: boolean
   currentTime: number
   duration: number
+  hoverTime: number | null
   viewMode: 'pan' | 'select'
   loopEnabled: boolean
   hasSelection: boolean
@@ -32,6 +33,7 @@ export const PlaybackControls = ({
   hasAudio,
   currentTime,
   duration,
+  hoverTime,
   viewMode,
   loopEnabled,
   hasSelection,
@@ -67,6 +69,12 @@ export const PlaybackControls = ({
         {hasAudio && duration > 0 && (
           <span className="file-meta">
             {formatTimecode(displayTime)} | {formatTimecode(duration)}
+            {hoverTime !== null && (
+              <span className="hover-timecode">
+                {' '}
+                [{formatTimecode(hoverTime)}]
+              </span>
+            )}
           </span>
         )}
       </div>
