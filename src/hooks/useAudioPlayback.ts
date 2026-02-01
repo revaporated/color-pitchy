@@ -30,7 +30,10 @@ export const useAudioPlayback = ({ onPlayError }: Options = {}): AudioPlayback =
       setIsPlaying(false)
       setCurrentTime(audio.duration || audio.currentTime)
     }
-    const handleTimeUpdate = () => setCurrentTime(audio.currentTime)
+    const handleTimeUpdate = () => {
+      // Still sync on standard timeupdate events
+      setCurrentTime(audio.currentTime)
+    }
 
     audio.addEventListener('play', handlePlay)
     audio.addEventListener('pause', handlePause)
@@ -44,6 +47,23 @@ export const useAudioPlayback = ({ onPlayError }: Options = {}): AudioPlayback =
       audio.removeEventListener('timeupdate', handleTimeUpdate)
     }
   }, [])
+
+  // High-frequency updates during playback for smooth UI
+  useEffect(() => {
+    if (!isPlaying) return
+
+    let rafId: number
+    const update = () => {
+      const audio = audioRef.current
+      if (audio) {
+        setCurrentTime(audio.currentTime)
+      }
+      rafId = requestAnimationFrame(update)
+    }
+
+    rafId = requestAnimationFrame(update)
+    return () => cancelAnimationFrame(rafId)
+  }, [isPlaying])
 
   const playPause = useCallback(() => {
     const audio = audioRef.current

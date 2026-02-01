@@ -66,7 +66,7 @@ export const PlaybackControls = ({
         </button>
         {hasAudio && duration > 0 && (
           <span className="file-meta">
-            {formatTimecode(displayTime)}/{formatTimecode(duration)}
+            {formatTimecode(displayTime)} | {formatTimecode(duration)}
           </span>
         )}
       </div>
