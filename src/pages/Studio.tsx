@@ -113,6 +113,7 @@ export default function StudioPage() {
     const epsilon = 0.03
     if (currentTime >= end - epsilon) {
       seek(start)
+      setPitchResetKey((value) => value + 1)
     }
   }, [currentTime, isPlaying, loopEnabled, seek, selection])
 

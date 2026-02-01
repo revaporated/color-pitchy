@@ -91,7 +91,6 @@ export const PlaybackControls = ({
         </button>
       </div>
       <div className="playback-controls__row playback-controls__row--secondary">
-        {/*
         <button
           type="button"
           onClick={() => onViewModeChange('select')}
@@ -102,7 +101,6 @@ export const PlaybackControls = ({
         >
           <LuTextCursor />
         </button>
-        */}
         {hasSelection && (
           <>
             <button

@@ -441,7 +441,21 @@ button:hover {
 }
 
 .waveform-selection-handle {
-  display: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(148, 197, 255, 0.8);
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+
+.waveform-selection-handle--start {
+  left: -1px;
+}
+
+.waveform-selection-handle--end {
+  right: -1px;
 }
 
 .waveform-hover-line {
