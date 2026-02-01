@@ -490,7 +490,7 @@ export function PitchGraph({
         const markerColor = colorizeMarker ? `rgb(${pitchStyle.rgb})` : '#0f172a';
         const markerShape = colorizeMarker ? pitchStyle.shape : 'circle';
 
-        drawMarker(ctx, x, y, 5, markerShape, markerColor);
+        drawMarker(ctx, x, y, 7, markerShape, markerColor);
 
         ctx.fillStyle = '#0f172a';
         ctx.font = 'bold 13px sans-serif';

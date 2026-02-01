@@ -36,8 +36,8 @@ export default function StudioPage() {
 
   // Pitch Detection
   const historyDuration = 10
-  const clarityThreshold = 0.85
-  const centsThreshold = 40
+  const clarityThreshold = 0.75
+  const centsThreshold = 45
   const colorizeMarker = true
   const showNoteLines = false
   const showNoteTrails = true
@@ -146,7 +146,7 @@ export default function StudioPage() {
           pixelsPerSecond={PIXELS_PER_SECOND}
           resetKey={pitchResetKey}
           showDiagnostics={false}
-          height={450}
+          height={500}
         />
 
         <Studio_WaveformViewer
