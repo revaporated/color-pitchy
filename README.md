@@ -1,6 +1,6 @@
 # color-pitchy
 
-A real-time pitch detector and pitch-history graph for the browser, where every note is drawn in its [Colorchord](https://github.com/revaporated/colorchord-refactor) color and shape. Sing or play into your mic, watch the pitch trace scroll by, and record what you played as a MIDI file.
+A real-time pitch detector and pitch-history graph for the browser, where every note is drawn in its [Colorchord](https://github.com/revaporated/colorchord-refactor) color and shape. Sing or play into your mic and watch the pitch trace scroll by, or load a track and sing over it on the same timeline as its waveform and pitch contour. Either can be exported as MIDI.
 
 This is the TypeScript/Vite rewrite of the pitch features from [`pitchy-test`](https://github.com/revaporated/pitchy-test) (Create React App, plain JS, Mar–Apr 2025). `pitchy-test` is kept only as a reference. See [What didn't carry over](#what-didnt-carry-over).
 
@@ -13,38 +13,37 @@ npm run build    # tsc -b && vite build
 npm run lint
 ```
 
-Needs a Node version that Vite 7 supports (20.19+ or 22.12+). The browser will ask for microphone permission the first time you press play on the main page. Use `localhost` or HTTPS, since `getUserMedia` won't work on plain HTTP.
+Needs a Node version that Vite 7 supports (20.19+ or 22.12+). The browser will ask for microphone permission the first time you start the mic. Use `localhost` or HTTPS, since `getUserMedia` won't work on plain HTTP.
 
 ## Pages
 
 | Route | What it does |
 |---|---|
-| `/` | Live mic pitch detection: scrolling pitch graph, controls, stats, MIDI recording, fullscreen. |
-| `/songs` | Load an audio file, see its waveform, play it, pan or select a region and loop it. Display only: **no pitch analysis of the file**. |
-| `/studio` | Experimental. The pitch graph sits above the waveform and follows the playhead, with hover timecode and loop selection. Pitch comes from the **microphone** while the track plays, so it's for singing or playing along with a track, not for analyzing the track itself. Use headphones. |
+| `/` | **Live.** Mic pitch on a rolling graph, independent of any audio. Controls, stats, MIDI recording, fullscreen. Stopping the mic freezes the graph so you can inspect the last few seconds. |
+| `/studio` | **Studio.** Everything in Live, plus a track. The pitch graph shares the waveform's x axis, so your pitch is drawn at the song position you sang it, on top of the track's own pitch contour. Use it to learn or transcribe a track. Headphones recommended. |
 
-## How detection works
+`/songs` redirects to `/studio`.
 
-1. `usePitchDetector` opens the mic, builds an `AudioContext`, and loads `src/worklets/pitch-detector.worklet.ts`.
-2. The worklet keeps a ring buffer of the last `fftSize` samples and runs [pitchy](https://github.com/ianprime0509/pitchy) on it at `detectionRateHz` (165 Hz). It posts `{frequency, clarity, audioTime}` to the main thread.
-3. The hook turns each result into a sample. It drops the sample if clarity is below the **clarity threshold**, the note is outside the **min/max detectable range**, or the pitch is farther than the **cents threshold** from the nearest semitone.
-4. Timestamps come from the audio clock (`audioTime`) rather than arrival time, so the graph isn't thrown off by main-thread jitter.
-5. `PitchGraph` draws from a history ring buffer on its own `requestAnimationFrame` loop (`GRAPH_MAX_FPS`), separate from the detection rate.
+### Studio in detail
 
-### Controls
-
-| Control | Range / options |
-|---|---|
-| Clarity | 0–100% (default 90%) |
-| Cents threshold | 5–49¢ (default 25¢) |
-| Min / max detectable note | min MIDI 24–84, max MIDI 84–96 (default 36–96, C2–C7) |
-| FFT size | 256 to 16384 (default 2048) |
-| History | 1–10 s |
-| Color marker, note lines, note trails, diagnostics | toggles |
+- **Mic and playback are separate.** Start the mic from the controls. *Only detect while the track is playing* (on by default) pauses detection whenever the track is paused.
+- **Record take.** While on, mic pitch is written onto the take whenever the track plays. The take is stored by song time, so it stays put when you seek, loop or pause. Singing over a passage again replaces just that passage (punch-in). *Clear take* wipes it.
+- **Reference contour.** When a track loads, a Web Worker runs pitchy over the whole file (`src/workers/referencePitch.worker.ts`) and the result is drawn as a wide translucent line colored by note. *Reference clarity* sets how confident a frame must be to show. Works best on tracks with one clear melodic line; on dense mixes it follows whatever is loudest.
+- **Sync offset.** Mic input and speaker output both add latency, so an uncalibrated take lands slightly late. Sing along with a clear part of the track and move the slider until your line sits on the reference.
+- **Exports.** *Take MIDI* and *Reference MIDI* turn either contour into notes (see [Recording to MIDI](#recording-to-midi)) using the current filters.
+- Click the pitch graph to seek. Pan/select, scroll/scrub, loop and hover timecode work as on the waveform.
 
 ## Recording to MIDI
 
-Press record on `/`, play or sing, press stop, then download the `.mid` file. The conversion (`src/utils/recording.ts`) is deliberately simple. It rounds each sample to the nearest semitone, ends a note whenever that rounded pitch changes, and writes a fixed 120 bpm, 128 ticks-per-beat track with [midi-writer-js](https://github.com/grimmdude/MidiWriterJS). There's no smoothing, minimum note length, vibrato handling or tempo/grid quantization, so expect extra short notes. It's a starting point, not a transcriber.
+Live: press record, play or sing, press stop, then download. Studio: *Take MIDI* or *Reference MIDI*. All three go through `src/utils/notes.ts`:
+
+1. apply the current detection filter
+2. 5-frame median smoothing
+3. round to semitones and split on pitch changes and gaps over 60 ms
+4. drop notes shorter than 60 ms (80 ms for the reference), which removes scoops and blips
+5. merge same-pitch neighbours across short gaps
+
+`src/utils/midi.ts` writes a format-0 file at 120 bpm with exact timing (no grid quantization). Raw frames are kept, so you can change thresholds and download again.
 
 ## Colors and shapes
 
@@ -71,31 +70,31 @@ This table is one of several copies of the palette across the Colorchord repos. 
 
 ```
 src/
-  main.tsx                 routes: / , /songs , /studio
-  App.tsx                  main detection page
-  pages/                   Songs.tsx, Studio.tsx
-  hooks/
-    usePitchDetector.ts    mic -> worklet -> pitch samples
-    usePitchRecording.ts   collects samples while recording
-    useAudioFile.ts        file upload + decode
-    useAudioPlayback.ts    <audio> element playback state
-  worklets/
-    pitch-detector.worklet.ts
-  components/              PitchGraph, PitchControls, PitchStats, RecordingControls,
-                           WaveformViewer, PlaybackControls, AudioUpload
-    studio/                Studio_* copies of the above (see Known issues)
-  utils/                   pitch.ts, recording.ts, waveform.ts
+  main.tsx                 routes: / (Live), /studio
+  App.tsx                  Live page
+  pages/Studio.tsx         Studio page
+  audio/
+    pitchEngine.ts         mic -> worklet -> raw frames (framework-free)
+    frames.ts              FrameRing (Live history), PitchTrack (song-time grid for take + reference)
+    playbackClock.ts       performance time -> song position for an <audio> element
+  worklets/                pitch-detector.worklet.ts + AudioWorklet type declarations
+  workers/                 referencePitch.worker.ts (offline contour of the loaded track)
+  hooks/                   usePitchEngine (+ useEngineStats), usePitchSettings, useLiveRecording,
+                           useReferenceTrack, useAudioFile, useAudioPlayback
+  components/              PitchGraph (shared by both modes), PitchControls, PitchStats,
+                           StudioControls, WaveformViewer, PlaybackControls, RecordingControls,
+                           AudioUpload, NavBar
+  utils/                   pitch.ts, notes.ts, midi.ts, waveform.ts
 ```
 
 ## Known issues
 
-- **Mic restarts when you change a detection setting.** The detector's effect depends on clarity, cents, range and FFT size, so changing any of them tears down and recreates the whole `AudioContext`, stream and worklet.
-- **Echo cancellation, noise suppression and auto-gain are on.** The mic is requested with `{ audio: true }`, and those browser processors distort pitch tracking. They should be turned off in `getUserMedia`.
-- **The main component re-renders at the detection rate.** `setSample` runs on every worklet message (up to 165 times a second). While recording, `setRecordingSamples` copies the whole array on each sample.
-- **`components/studio/` is a copy-paste fork** of the main components (about 1.9k lines). `PitchControls` and `PitchStats` are nearly identical to the originals, and `PitchGraph` and `WaveformViewer` differ by a few dozen to a hundred-odd lines. These should become one set of shared components.
-- **Uploaded files are never pitch-analyzed.** Detection only reads the mic.
-- **MIDI recording is naive** (see above).
-- **No tests**, and the template's favicon and page title are still in `index.html`.
+- **Sync offset is manual.** There's no automatic latency calibration yet.
+- **Overdubs replace.** Re-singing a passage overwrites it; there's no multi-take history.
+- **Reference contour is monophonic.** It's one pitchy estimate per 10 ms, so chords and dense mixes give a noisy line.
+- **Only MP3 files load** (`useAudioFile` checks the type).
+- **No automated tests in the repo**, and the template's favicon and page title are still in `index.html`.
+- `midi-writer-js` and `meyda` are still in `package.json` but unused.
 
 ## What didn't carry over
 
@@ -104,10 +103,9 @@ Features still only in `pitchy-test`:
 - Chroma detector (meyda), at `/chroma`.
 - Metronome and tick marks, and the separate time-based graph.
 - Pitch deviation meter (tuner view).
-- Sticky header and nav. The nav in `Studio.tsx` is commented out here.
 
-Items that were on `pitchy-test`'s TODO and aren't built in either repo: clarity grace period, minimum note duration, audio preprocessing, tempo detection, dark mode, settings persistence.
+Items that were on `pitchy-test`'s TODO and aren't built in either repo: clarity grace period, audio preprocessing, tempo detection, dark mode. (Minimum note duration now exists for MIDI export, and settings persist.)
 
 ## Stack
 
-React 19, TypeScript 5.9, Vite 7, Tailwind 4, React Router 7, pitchy 4, meyda (installed, currently unused here), midi-writer-js, react-icons.
+React 19, TypeScript 5.9, Vite 7, Tailwind 4, React Router 7, pitchy 4, react-icons. (`meyda` and `midi-writer-js` are installed but unused.)

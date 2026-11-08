@@ -561,3 +561,44 @@ button:disabled {
   text-align: center;
   color: #94a3b8;
 }
+/* --- Studio (parity-sprint) --- */
+
+.nav-header {
+  padding: 12px 16px;
+}
+
+/* Same horizontal borders as .waveform-viewport so the graph's inner width
+   matches the viewport's and both share one x axis. */
+.studio-graph {
+  box-sizing: border-box;
+  border-left: 2px solid #e2e8f0;
+  border-right: 2px solid #e2e8f0;
+  cursor: pointer;
+}
+
+.studio-controls__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.studio-controls__row .toggle-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.record-toggle.recording {
+  border-color: #ef4444;
+  background: #b91c1c;
+}
+
+.studio-hint {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.controls label.checkbox .studio-hint {
+  margin-left: 4px;
+}

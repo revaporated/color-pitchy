@@ -1,183 +1,249 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { ChangeEvent, RefObject } from 'react'
-import { AudioUpload as Studio_AudioUpload } from '../components/studio/Studio_AudioUpload';
-import { WaveformViewer as Studio_WaveformViewer } from '../components/studio/Studio_WaveformViewer';
-import { PlaybackControls as Studio_PlaybackControls } from '../components/studio/Studio_PlaybackControls';
-import { PitchGraph as Studio_PitchGraph } from '../components/studio/Studio_PitchGraph';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
+import { PitchTrack } from '../audio/frames';
+import { PlaybackClock } from '../audio/playbackClock';
+import { AudioUpload } from '../components/AudioUpload';
+import { NavBar } from '../components/NavBar';
+import { PitchControls } from '../components/PitchControls';
+import { PitchGraph } from '../components/PitchGraph';
+import { PitchStats } from '../components/PitchStats';
+import { PlaybackControls } from '../components/PlaybackControls';
+import { StudioControls } from '../components/StudioControls';
+import { WaveformViewer } from '../components/WaveformViewer';
 import { useAudioFile } from '../hooks/useAudioFile';
 import { useAudioPlayback } from '../hooks/useAudioPlayback';
-import { usePitchDetector } from '../hooks/usePitchDetector';
+import { useEngineStats, usePitchEngine } from '../hooks/usePitchEngine';
+import { usePitchSettings, useStudioSettings } from '../hooks/usePitchSettings';
+import { useReferenceTrack } from '../hooks/useReferenceTrack';
+import { buildMidiFile, downloadBytes } from '../utils/midi';
+import { collectPitches, segmentNotes } from '../utils/notes';
+import type { DetectionFilter } from '../utils/pitch';
 import { PIXELS_PER_SECOND } from '../utils/waveform';
 
+const TAKE_GRID_HZ = 200;
+const GRAPH_HEIGHT = 420;
+
+type Selection = { start: number; end: number };
+
 /**
- * Studio Mode (Experimental)
- * This page will eventually integrate the duplicated components from src/components/studio/
+ * Studio mode: everything in Live, plus a track. The pitch graph shares the
+ * waveform's x axis, so the take is drawn at the song position it was sung at,
+ * on top of the track's own pitch contour, and stays put when you seek.
  */
 export default function StudioPage() {
-  const {
-    audioUrl,
-    audioBuffer,
-    fileName,
-    isDecoding,
-    error,
-    duration,
-    setError,
-    handleFileChange,
-  } = useAudioFile()
+  const { controls, filter } = usePitchSettings();
+  const studio = useStudioSettings();
 
-  const handlePlayError = useCallback(() => {
-    setError('Unable to start playback.')
-  }, [setError])
+  const { audioUrl, audioBuffer, fileName, isDecoding, error, duration, setError, handleFileChange } =
+    useAudioFile();
+  const handlePlayError = useCallback(() => setError('Unable to start playback.'), [setError]);
+  const { audioRef, isPlaying, currentTime, playPause, stop, seek } = useAudioPlayback({
+    onPlayError: handlePlayError,
+  });
+  const hasAudio = Boolean(audioUrl && audioBuffer);
 
-  const { audioRef, isPlaying, currentTime, playPause, stop, seek } =
-    useAudioPlayback({
-      onPlayError: handlePlayError,
-    })
+  // Mic
+  const [armed, setArmed] = useState(false);
+  const detectionActive = !studio.onlyWhilePlaying || isPlaying;
+  const { engine, error: micError } = usePitchEngine({
+    armed,
+    fftSize: controls.fftSize,
+    active: detectionActive,
+  });
+  const { sample } = useEngineStats(engine, filter);
 
-  // Pitch Detection
-  const historyDuration = 10
-  const clarityThreshold = 0.75
-  const centsThreshold = 45
-  const colorizeMarker = true
-  const showNoteLines = false
-  const showNoteTrails = true
+  // Song clock, take and reference
+  const [clock] = useState(() => new PlaybackClock());
+  useEffect(() => {
+    clock.attach(audioRef.current);
+    return () => clock.attach(null);
+  }, [clock, audioRef]);
 
-  const { sample } = usePitchDetector({
-    enabled: isPlaying,
-    clarityThreshold,
-    centsThreshold,
-  })
+  const take = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
+  const reference = useReferenceTrack(audioBuffer);
+  const referenceFilter: DetectionFilter = useMemo(
+    () => ({
+      clarityThreshold: studio.referenceClarity,
+      centsThreshold: 50, // recorded performances drift; don't cents-gate the reference
+      minMidi: filter.minMidi,
+      maxMidi: filter.maxMidi,
+    }),
+    [studio.referenceClarity, filter.minMidi, filter.maxMidi],
+  );
 
-  const [pitchResetKey, setPitchResetKey] = useState(0)
+  // Write mic frames onto the take at the song position they were sung at.
+  const recordingRef = useRef(false);
+  const offsetSecondsRef = useRef(0);
+  useEffect(() => {
+    recordingRef.current = studio.recordTake && hasAudio;
+    offsetSecondsRef.current = studio.syncOffsetMs / 1000;
+  }, [studio.recordTake, studio.syncOffsetMs, hasAudio]);
 
-  const [viewMode, setViewMode] = useState<'pan' | 'select'>('pan')
-  const [loopEnabled, setLoopEnabled] = useState(false)
-  const [selection, setSelection] = useState<{ start: number; end: number } | null>(
-    null,
-  )
-  const [hoverTime, setHoverTime] = useState<number | null>(null)
+  useEffect(
+    () =>
+      engine.subscribe((frame) => {
+        if (!recordingRef.current) return;
+        clock.sync();
+        if (!clock.isPlaying) return;
+        const perfMs = frame.time * 1000;
+        if (perfMs < clock.discontinuityPerfMs) return; // sung before the last seek
+        take.write(clock.songTimeAt(perfMs) - offsetSecondsRef.current, frame.frequency, frame.clarity);
+      }),
+    [engine, clock, take],
+  );
 
-  const handleStop = useCallback(() => {
-    stop()
-    setPitchResetKey((value) => value + 1)
-  }, [stop])
+  // Waveform view state
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewMode, setViewMode] = useState<'pan' | 'select'>('pan');
+  const [panMode, setPanMode] = useState<'scroll' | 'scrub'>('scroll');
+  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
 
-  const handleWaveformClick = useCallback(() => {
-    setPitchResetKey((value) => value + 1)
-  }, [])
+  const seekTo = useCallback(
+    (time: number) => {
+      take.breakContinuity();
+      seek(Math.max(0, Math.min(time, duration || time)));
+    },
+    [duration, seek, take],
+  );
 
   const handleUpload = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      handleStop()
-      setSelection(null)
-      setLoopEnabled(false)
-      handleFileChange(event)
+      stop();
+      setSelection(null);
+      setLoopEnabled(false);
+      handleFileChange(event);
     },
-    [handleFileChange, handleStop],
-  )
+    [handleFileChange, stop],
+  );
 
-  const hasAudio = Boolean(audioUrl && audioBuffer)
-
-  const handleSelectionChange = useCallback(
-    (nextSelection: { start: number; end: number } | null) => {
-      setSelection(nextSelection)
-      setLoopEnabled(Boolean(nextSelection))
-    },
-    [],
-  )
+  const handleSelectionChange = useCallback((next: Selection | null) => {
+    setSelection(next);
+    setLoopEnabled(Boolean(next));
+  }, []);
 
   const handleSelectionClear = useCallback(() => {
-    setSelection(null)
-    setLoopEnabled(false)
-  }, [])
+    setSelection(null);
+    setLoopEnabled(false);
+  }, []);
 
   const handlePlayPause = useCallback(() => {
     if (!isPlaying && loopEnabled && selection) {
-      const start = Math.min(selection.start, selection.end)
-      const end = Math.max(selection.start, selection.end)
-      if (currentTime < start || currentTime > end) {
-        seek(start)
-      }
+      const start = Math.min(selection.start, selection.end);
+      const end = Math.max(selection.start, selection.end);
+      if (currentTime < start || currentTime > end) seekTo(start);
     }
+    playPause();
+  }, [currentTime, isPlaying, loopEnabled, playPause, seekTo, selection]);
 
-    playPause()
-  }, [currentTime, isPlaying, loopEnabled, playPause, seek, selection])
-
+  // Loop the selection. Checked every animation frame against the audio element
+  // itself, since the React currentTime state is throttled.
   useEffect(() => {
-    if (!isPlaying || !loopEnabled || !selection) return
+    if (!isPlaying || !loopEnabled || !selection) return;
+    const start = Math.min(selection.start, selection.end);
+    const end = Math.max(selection.start, selection.end);
+    if (end - start < 0.05) return;
 
-    const start = Math.min(selection.start, selection.end)
-    const end = Math.max(selection.start, selection.end)
-    if (end <= start) return
+    let rafId = 0;
+    const tick = () => {
+      const audio = audioRef.current;
+      if (audio && audio.currentTime >= end - 0.01) seekTo(start);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [audioRef, isPlaying, loopEnabled, seekTo, selection]);
 
-    const epsilon = 0.03
-    if (currentTime >= end - epsilon) {
-      seek(start)
-      setPitchResetKey((value) => value + 1)
+  // Take / reference actions
+  const baseName = fileName ? fileName.replace(/\.[^.]+$/, '') : 'track';
+
+  const clearTake = () => {
+    if (take.hasData() && !window.confirm('Clear the recorded take?')) return;
+    take.clear();
+  };
+
+  const exportTake = () => {
+    const notes = segmentNotes(collectPitches(take, 0, duration, filter));
+    if (notes.length === 0) {
+      window.alert('The take has no notes that pass the current detection filter.');
+      return;
     }
-  }, [currentTime, isPlaying, loopEnabled, seek, selection])
+    downloadBytes(buildMidiFile(notes), `${baseName}-take.mid`);
+  };
+
+  const exportReference = () => {
+    if (!reference.track) return;
+    const notes = segmentNotes(collectPitches(reference.track, 0, duration, referenceFilter), {
+      minDuration: 0.08,
+    });
+    if (notes.length === 0) {
+      window.alert('No reference notes pass the current reference clarity.');
+      return;
+    }
+    downloadBytes(buildMidiFile(notes), `${baseName}-reference.mid`);
+  };
 
   return (
     <div className="app">
-      {/* <header className="card nav-header">
-        <nav>
-          <Link to="/">Pitch Detection</Link>
-          <Link to="/songs">Songs</Link>
-          <Link to="/studio" className="active">Studio Mode</Link>
-        </nav>
-      </header>
-
-      <div className="card">
-        <h1>Studio Mode</h1>
-        <p>
-          Welcome to the Studio. This is an experimental area for recording over audio tracks
-          and analyzing pitch in real-time.
-        </p>
-      </div> */}
+      <NavBar />
+      {micError && <div className="error">{micError}</div>}
 
       <div className="card waveform-card">
-        <Studio_PitchGraph
-          sample={sample}
-          historyDuration={historyDuration}
-          colorizeMarker={colorizeMarker}
-          showNoteLines={showNoteLines}
-          showNoteTrails={showNoteTrails}
-          currentTime={currentTime}
-          duration={duration}
-          isPlaying={isPlaying}
-          pixelsPerSecond={PIXELS_PER_SECOND}
-          resetKey={pitchResetKey}
-          showDiagnostics={false}
-          height={500}
+        <PitchGraph
+          className="studio-graph"
+          mode={{
+            kind: 'timeline',
+            viewportRef,
+            pixelsPerSecond: PIXELS_PER_SECOND,
+            clock,
+            take,
+            reference: studio.showReference ? reference.track : null,
+            referenceFilter,
+            showLiveMarker: armed && detectionActive,
+          }}
+          engine={engine}
+          filter={filter}
+          colorizeMarker={controls.colorizeMarker}
+          showNoteLines={controls.showNoteLines}
+          showNoteTrails={controls.showNoteTrails}
+          showDiagnostics={controls.showDiagnostics}
+          height={GRAPH_HEIGHT}
+          onSeek={hasAudio ? seekTo : undefined}
         />
 
-        <Studio_WaveformViewer
+        <WaveformViewer
           audioBuffer={audioBuffer}
-          audioRef={audioRef as RefObject<HTMLAudioElement>}
+          audioRef={audioRef}
           duration={duration}
           isPlaying={isPlaying}
           currentTime={currentTime}
-          onSeek={seek}
-          onWaveformClick={handleWaveformClick}
+          onSeek={seekTo}
           onHoverTimeChange={setHoverTime}
           viewMode={viewMode}
-          panMode="scroll"
+          panMode={panMode}
+          viewportRef={viewportRef}
           selection={selection}
           onSelectionChange={handleSelectionChange}
         />
 
-        <Studio_PlaybackControls
+        <PlaybackControls
           isPlaying={isPlaying}
           hasAudio={hasAudio}
           currentTime={currentTime}
           duration={duration}
           hoverTime={hoverTime}
           viewMode={viewMode}
+          panMode={panMode}
           loopEnabled={loopEnabled}
           hasSelection={Boolean(selection)}
           onPlayPause={handlePlayPause}
-          onStop={handleStop}
+          onStop={() => {
+            stop();
+            take.breakContinuity();
+          }}
           onViewModeChange={setViewMode}
+          onPanModeChange={setPanMode}
           onToggleLoop={() => setLoopEnabled((value) => !value)}
           onClearSelection={handleSelectionClear}
         />
@@ -185,12 +251,39 @@ export default function StudioPage() {
         <audio ref={audioRef} src={audioUrl ?? undefined} preload="auto" hidden />
       </div>
 
-      <Studio_AudioUpload
+      <StudioControls
+        hasAudio={hasAudio}
+        micArmed={armed}
+        recordTake={studio.recordTake}
+        setRecordTake={studio.setRecordTake}
+        onlyWhilePlaying={studio.onlyWhilePlaying}
+        setOnlyWhilePlaying={studio.setOnlyWhilePlaying}
+        showReference={studio.showReference}
+        setShowReference={studio.setShowReference}
+        referenceClarity={studio.referenceClarity}
+        setReferenceClarity={studio.setReferenceClarity}
+        syncOffsetMs={studio.syncOffsetMs}
+        setSyncOffsetMs={studio.setSyncOffsetMs}
+        reference={reference}
+        onClearTake={clearTake}
+        onExportTake={exportTake}
+        onExportReference={exportReference}
+      />
+
+      <AudioUpload
         fileName={fileName}
         isDecoding={isDecoding}
         error={error}
         onFileChange={handleUpload}
       />
+
+      <PitchControls
+        {...controls}
+        enabled={armed}
+        setEnabled={setArmed}
+        showHistory={false}
+      />
+      <PitchStats sample={sample} />
     </div>
   );
 }

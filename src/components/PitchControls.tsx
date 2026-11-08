@@ -32,6 +32,8 @@ type Props = {
   setShowDiagnostics: Dispatch<SetStateAction<boolean>>;
   setMinDetectableNote: Dispatch<SetStateAction<number>>;
   setMaxDetectableNote: Dispatch<SetStateAction<number>>;
+  /** Hide the History control (Studio's graph follows the song timeline instead). */
+  showHistory?: boolean;
   isFullscreen?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -62,6 +64,7 @@ export function PitchControls({
   setShowDiagnostics,
   setMinDetectableNote,
   setMaxDetectableNote,
+  showHistory = true,
   isFullscreen = false,
   collapsed = false,
   onToggleCollapsed,
@@ -183,6 +186,7 @@ export function PitchControls({
                 </div>
               </div>
 
+              {showHistory && (
               <div className="stepper-row">
                 <div className="stepper-text">
                   <span className="stepper-label">History</span>
@@ -205,6 +209,7 @@ export function PitchControls({
                   </button>
                 </div>
               </div>
+              )}
 
               <div className="toggle-row">
                 <span className="stepper-label">Color marker</span>
@@ -340,7 +345,7 @@ export function PitchControls({
   return (
     <div className="card controls">
       <button onClick={() => setEnabled((value) => !value)}>
-        {enabled ? 'Stop' : 'Start'}
+        {enabled ? 'Stop mic' : 'Start mic'}
       </button>
 
       <label>
@@ -369,6 +374,7 @@ export function PitchControls({
         />
       </label>
 
+      {showHistory && (
       <label>
         History (seconds): {historyDuration}
         <input
@@ -382,6 +388,7 @@ export function PitchControls({
           }
         />
       </label>
+      )}
 
       <label>
         Cents threshold: ±{centsThreshold}c

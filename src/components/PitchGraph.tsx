@@ -1,180 +1,78 @@
-import { useEffect, useRef } from 'react';
-import type { PitchSample } from '../hooks/usePitchDetector';
-import { formatNoteLabel, midiToNoteIndex, PITCH_COLOR_SHAPE_MAP } from '../utils/pitch';
+import { useEffect, useLayoutEffect, useRef } from 'react';
+import type { MouseEvent, RefObject } from 'react';
+import type { FrameSource } from '../audio/frames';
+import type { PitchEngine } from '../audio/pitchEngine';
+import type { PlaybackClock } from '../audio/playbackClock';
+import {
+  formatNoteLabel,
+  frameToMidi,
+  midiToNoteIndex,
+  PITCH_COLOR_SHAPE_MAP,
+  type DetectionFilter,
+} from '../utils/pitch';
+import { PLAYHEAD_WIDTH } from '../utils/waveform';
 
-const LOWEST_NOTE = 36; // C2
-const HIGHEST_NOTE = 96; // C8
+/** Live: a rolling window ending "now" on the performance clock. */
+export type LiveGraphMode = {
+  kind: 'live';
+  source: FrameSource;
+  historyDuration: number; // seconds
+  /** performance seconds to freeze the view at (detection stopped), or null to follow now */
+  frozenAt: number | null;
+  recordingStartAt: number | null; // performance seconds
+};
 
-type HistoryBuffer = {
-  data: Array<PitchSample | null>;
-  head: number;
-  count: number;
-  capacity: number;
+/** Timeline: x axis is song time, scrolled in lockstep with the waveform viewport. */
+export type TimelineGraphMode = {
+  kind: 'timeline';
+  viewportRef: RefObject<HTMLDivElement | null>;
+  pixelsPerSecond: number;
+  clock: PlaybackClock;
+  take: FrameSource;
+  reference: FrameSource | null;
+  referenceFilter: DetectionFilter;
+  /** Draw the current mic pitch at the playhead. */
+  showLiveMarker: boolean;
 };
 
 type Props = {
-  sample: PitchSample;
-  historyDuration: number; // seconds
+  mode: LiveGraphMode | TimelineGraphMode;
+  engine: PitchEngine;
+  filter: DetectionFilter;
   colorizeMarker: boolean;
   showNoteLines: boolean;
   showNoteTrails: boolean;
+  showDiagnostics: boolean;
   height?: number;
-  isRecording?: boolean;
-  recordingStartAt?: number | null;
-  detectionsPerSecond?: number;
   maxFps?: number;
-  detectionRateHz?: number;
-  showDiagnostics?: boolean;
+  /** Timeline only: clicking the graph seeks here (seconds). */
+  onSeek?: (time: number) => void;
+  className?: string;
 };
 
-export function PitchGraph({
-  sample,
-  historyDuration,
-  colorizeMarker,
-  showNoteLines,
-  showNoteTrails,
-  height,
-  isRecording = false,
-  recordingStartAt = null,
-  detectionsPerSecond = 0,
-  maxFps = 165,
-  detectionRateHz = 165,
-  showDiagnostics = true,
-}: Props) {
+const BACKGROUND = '#f8fafc';
+const TAKE_LINE = '#334155';
+const MAX_GAP_SECONDS = 0.06; // break lines across gaps longer than this
+const MARKER_MAX_AGE = 0.25; // seconds; older frames don't get a "current" marker
+
+export function PitchGraph(props: Props) {
+  const { height, className } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const historyRef = useRef<HistoryBuffer>({
-    data: [],
-    head: 0,
-    count: 0,
-    capacity: 0,
-  });
-  const detectionRateRef = useRef(detectionRateHz || maxFps);
-  const sampleRef = useRef<PitchSample>(sample);
+  const propsRef = useRef(props);
   const sizeRef = useRef({ width: 800, height: height ?? 320 });
-  const fpsRef = useRef({
-    lastTime: performance.now(),
-    frames: 0,
-    value: 0,
+
+  // The draw loop runs once and reads the latest props from here, so prop
+  // changes never restart it and parents don't need to re-render per frame.
+  useLayoutEffect(() => {
+    propsRef.current = props;
   });
-  const rafFpsRef = useRef({
-    lastTime: performance.now(),
-    frames: 0,
-    value: 0,
-  });
-  const detectionsRef = useRef(detectionsPerSecond);
-  const lastDrawRef = useRef(0);
-  const canvasSizeRef = useRef({ width: 0, height: 0, dpr: 0 });
-  const staticCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const staticConfigRef = useRef({
-    width: 0,
-    height: 0,
-    dpr: 0,
-    showNoteLines: false,
-  });
-
-  useEffect(() => {
-    sampleRef.current = sample;
-  }, [sample]);
-
-  useEffect(() => {
-    detectionsRef.current = detectionsPerSecond;
-  }, [detectionsPerSecond]);
-
-  useEffect(() => {
-    if (detectionRateHz > 0) {
-      detectionRateRef.current = detectionRateHz;
-    }
-  }, [detectionRateHz]);
-
-  const resizeHistoryBuffer = (capacity: number) => {
-    const history = historyRef.current;
-    if (capacity <= 0 || history.capacity === capacity) return;
-
-    const nextData = new Array<PitchSample | null>(capacity).fill(null);
-    const count = Math.min(history.count, capacity);
-
-    if (history.count > 0 && history.capacity > 0 && count > 0) {
-      const startIndex =
-        (history.head - history.count + history.capacity) % history.capacity;
-      const startOffset = Math.max(0, history.count - count);
-
-      for (let i = 0; i < count; i += 1) {
-        const sourceIndex =
-          (startIndex + startOffset + i) % history.capacity;
-        nextData[i] = history.data[sourceIndex];
-      }
-    }
-
-    historyRef.current = {
-      data: nextData,
-      head: count % capacity,
-      count,
-      capacity,
-    };
-  };
-
-  useEffect(() => {
-    const rate = detectionRateRef.current || 1;
-    const capacity = Math.max(1, Math.ceil(rate * historyDuration));
-    resizeHistoryBuffer(capacity);
-  }, [historyDuration, detectionRateHz]);
-
-  // Frame rate diagnostic for requestAnimationFrame
-  useEffect(() => {
-    if (!showDiagnostics) return;
-    let rafId = 0;
-    const tick = () => {
-      const now = performance.now();
-      rafFpsRef.current.frames += 1;
-      const elapsed = now - rafFpsRef.current.lastTime;
-      if (elapsed >= 500) {
-        rafFpsRef.current.value = Math.round(
-          (rafFpsRef.current.frames * 1000) / elapsed
-        );
-        rafFpsRef.current.frames = 0;
-        rafFpsRef.current.lastTime = now;
-      }
-      rafId = requestAnimationFrame(tick);
-    };
-
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
-  }, [showDiagnostics]);
-
-  useEffect(() => {
-    const history = historyRef.current;
-    if (history.capacity === 0) {
-      const rate = detectionRateRef.current || 1;
-      resizeHistoryBuffer(Math.max(1, Math.ceil(rate * historyDuration)));
-    }
-
-    const now = sample.timestamp || performance.now();
-    const nextIndex = history.head;
-    const entry = history.data[nextIndex];
-    if (entry) {
-      entry.timestamp = now;
-      entry.frequency = sample.frequency;
-      entry.clarity = sample.clarity;
-      entry.midi = sample.midi;
-    } else {
-      history.data[nextIndex] = {
-        timestamp: now,
-        frequency: sample.frequency,
-        clarity: sample.clarity,
-        midi: sample.midi,
-      };
-    }
-
-    history.head = (nextIndex + 1) % history.capacity;
-    history.count = Math.min(history.count + 1, history.capacity);
-  }, [sample, historyDuration]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const parent = canvas.parentElement;
 
     const updateSize = () => {
-      const parent = canvas.parentElement;
       const width = parent ? parent.clientWidth : 800;
       const resolvedHeight = height ?? (parent ? parent.clientHeight : 320);
       sizeRef.current = { width, height: resolvedHeight };
@@ -182,15 +80,8 @@ export function PitchGraph({
 
     updateSize();
     window.addEventListener('resize', updateSize);
-
-    let observer: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined') {
-      const parent = canvas.parentElement;
-      if (parent) {
-        observer = new ResizeObserver(() => updateSize());
-        observer.observe(parent);
-      }
-    }
+    const observer = typeof ResizeObserver !== 'undefined' && parent ? new ResizeObserver(updateSize) : null;
+    if (observer && parent) observer.observe(parent);
 
     return () => {
       window.removeEventListener('resize', updateSize);
@@ -200,301 +91,357 @@ export function PitchGraph({
 
   useEffect(() => {
     let rafId = 0;
+    let lastDraw = 0;
+    let canvasKey = '';
+    let staticKey = '';
+    const staticCanvas = document.createElement('canvas');
+    const fps = { last: performance.now(), frames: 0, value: 0 };
 
     const draw = () => {
+      rafId = requestAnimationFrame(draw);
       const canvas = canvasRef.current;
-      if (!canvas) return;
+      const ctx = canvas?.getContext('2d');
+      if (!canvas || !ctx) return;
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      const now = performance.now();
-      if (Number.isFinite(maxFps) && maxFps > 0) {
-        const minFrameMs = 1000 / maxFps;
-        if (now - lastDrawRef.current < minFrameMs) {
-          rafId = requestAnimationFrame(draw);
-          return;
-        }
-        lastDrawRef.current = now;
-      }
+      const p = propsRef.current;
+      const nowMs = performance.now();
+      const maxFps = p.maxFps ?? 165;
+      if (maxFps > 0 && nowMs - lastDraw < 1000 / maxFps) return;
+      lastDraw = nowMs;
 
       const { width, height: h } = sizeRef.current;
       const dpr = window.devicePixelRatio || 1;
       const pixelWidth = Math.max(1, Math.round(width * dpr));
       const pixelHeight = Math.max(1, Math.round(h * dpr));
-
-      if (
-        canvasSizeRef.current.width !== pixelWidth ||
-        canvasSizeRef.current.height !== pixelHeight ||
-        canvasSizeRef.current.dpr !== dpr
-      ) {
+      const nextCanvasKey = `${pixelWidth}x${pixelHeight}@${dpr}`;
+      if (nextCanvasKey !== canvasKey) {
         canvas.width = pixelWidth;
         canvas.height = pixelHeight;
         canvas.style.width = `${width}px`;
         canvas.style.height = `${h}px`;
-        canvasSizeRef.current = { width: pixelWidth, height: pixelHeight, dpr };
+        canvasKey = nextCanvasKey;
       }
 
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const lo = p.filter.minMidi;
+      const hi = Math.max(p.filter.maxMidi, lo + 1);
+      const yOf = (midi: number) => mapMidiToY(midi, h, lo, hi);
 
-      ctx.fillStyle = '#f8fafc';
-      ctx.fillRect(0, 0, width, h);
-      let staticCanvas = staticCanvasRef.current;
-      if (!staticCanvas) {
-        staticCanvas = document.createElement('canvas');
-        staticCanvasRef.current = staticCanvas;
-      }
-
-      if (
-        staticConfigRef.current.width !== pixelWidth ||
-        staticConfigRef.current.height !== pixelHeight ||
-        staticConfigRef.current.dpr !== dpr ||
-        staticConfigRef.current.showNoteLines !== showNoteLines
-      ) {
+      // Grid lines change rarely; cache them on an offscreen canvas.
+      const nextStaticKey = `${nextCanvasKey}|${p.showNoteLines}|${lo}-${hi}`;
+      if (nextStaticKey !== staticKey) {
         staticCanvas.width = pixelWidth;
         staticCanvas.height = pixelHeight;
         const staticCtx = staticCanvas.getContext('2d');
         if (staticCtx) {
           staticCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          staticCtx.clearRect(0, 0, width, h);
-          drawStaticLayer(staticCtx, width, h, showNoteLines);
+          drawStaticLayer(staticCtx, width, h, lo, hi, p.showNoteLines);
         }
-        staticConfigRef.current = {
-          width: pixelWidth,
-          height: pixelHeight,
-          dpr,
-          showNoteLines,
-        };
+        staticKey = nextStaticKey;
       }
 
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = BACKGROUND;
+      ctx.fillRect(0, 0, width, h);
       ctx.drawImage(staticCanvas, 0, 0, width, h);
 
-      const pixelsPerMs = width / (historyDuration * 1000);
-      const history = historyRef.current;
-      const historyCount = history.count;
-      const historyCapacity = history.capacity;
-      const historyStartIndex =
-        historyCount > 0 && historyCapacity > 0
-          ? (history.head - historyCount + historyCapacity) % historyCapacity
-          : 0;
+      const mode = p.mode;
+      let t0: number;
+      let t1: number;
+      let xOf: (time: number) => number;
+      let markerX: number;
+      let showMarker: boolean;
+      let mainSource: FrameSource;
 
-      if (showNoteTrails && historyCount > 0 && historyCapacity > 0) {
-        const minSegmentWidth = 2;
+      if (mode.kind === 'live') {
+        t1 = mode.frozenAt ?? nowMs / 1000;
+        t0 = t1 - mode.historyDuration;
+        const pxPerSecond = width / mode.historyDuration;
+        xOf = (time) => width - (t1 - time) * pxPerSecond;
+        markerX = width - 2;
+        showMarker = mode.frozenAt === null;
+        mainSource = mode.source;
 
-        ctx.save();
-        ctx.globalAlpha = 0.28;
-
-        for (let i = 0; i < historyCount; i += 1) {
-          const s = history.data[(historyStartIndex + i) % historyCapacity];
-          if (!s || s.midi == null) continue;
-          if (now - s.timestamp > historyDuration * 1000) continue;
-
-          const noteMidi = Math.round(s.midi);
-          const noteIndex = midiToNoteIndex(noteMidi);
-          const { rgb } = PITCH_COLOR_SHAPE_MAP[noteIndex];
-          ctx.fillStyle = `rgb(${rgb})`;
-
-          const x = width - (now - s.timestamp) * pixelsPerMs;
-          const next =
-            i + 1 < historyCount
-              ? history.data[(historyStartIndex + i + 1) % historyCapacity]
-              : null;
-          const hasNext =
-            next != null &&
-            next.midi != null &&
-            now - next.timestamp <= historyDuration * 1000;
-          const nextX =
-            hasNext
-              ? width - (now - next.timestamp) * pixelsPerMs
-              : x + minSegmentWidth;
-          const startX = Math.min(x, nextX);
-          const endX = Math.max(x, nextX);
-
-          if (endX < 0 || startX > width) continue;
-
-          const topY = mapMidiToY(noteMidi + 0.5, h);
-          const bottomY = mapMidiToY(noteMidi - 0.5, h);
-          const y = Math.min(topY, bottomY);
-          const rectHeight = Math.abs(bottomY - topY);
-          const rectX = Math.max(0, startX);
-          const rectWidth = Math.min(width, endX) - rectX;
-
-          if (rectWidth <= 0 || rectHeight <= 0) continue;
-          ctx.fillRect(rectX, y, Math.max(minSegmentWidth, rectWidth), rectHeight);
+        if (mode.recordingStartAt !== null) {
+          drawVerticalLine(ctx, xOf(mode.recordingStartAt), h, '#ef4444', 2, 0.7);
         }
+      } else {
+        mode.clock.sync();
+        const viewport = mode.viewportRef.current;
+        const scrollLeft = viewport?.scrollLeft ?? 0;
+        const pps = mode.pixelsPerSecond;
+        t0 = scrollLeft / pps;
+        t1 = (scrollLeft + width) / pps;
+        xOf = (time) => time * pps - scrollLeft;
+        const songNow = mode.clock.songTimeAt(nowMs);
+        markerX = Math.max(0, Math.min(xOf(songNow), width - PLAYHEAD_WIDTH));
+        showMarker = mode.showLiveMarker;
+        mainSource = mode.take;
 
-        ctx.restore();
-      }
-
-      if (isRecording && recordingStartAt != null) {
-        const markerX = width - (now - recordingStartAt) * pixelsPerMs;
-
-        if (markerX >= 0 && markerX <= width) {
-          ctx.save();
-          ctx.strokeStyle = '#ef4444';
-          ctx.lineWidth = 2;
-          ctx.globalAlpha = 0.7;
-          ctx.beginPath();
-          ctx.moveTo(markerX, 0);
-          ctx.lineTo(markerX, h);
-          ctx.stroke();
-          ctx.restore();
+        if (mode.reference) {
+          drawReferenceContour(ctx, mode.reference, t0, t1, xOf, yOf, mode.referenceFilter);
         }
       }
 
-      // Pitch line
-      ctx.strokeStyle = '#334155';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-
-      let drawing = false;
-      if (historyCount > 0 && historyCapacity > 0) {
-        for (let i = 0; i < historyCount; i += 1) {
-          const s = history.data[(historyStartIndex + i) % historyCapacity];
-          if (!s || s.midi == null) {
-            drawing = false;
-            continue;
-          }
-
-          if (now - s.timestamp > historyDuration * 1000) {
-            drawing = false;
-            continue;
-          }
-
-          const x = width - (now - s.timestamp) * pixelsPerMs;
-          if (x < 0) continue;
-
-          const y = mapMidiToY(s.midi, h);
-
-          if (!drawing) {
-            ctx.moveTo(x, y);
-            drawing = true;
-          } else {
-            ctx.lineTo(x, y);
-          }
-        }
+      if (p.showNoteTrails) {
+        drawTrails(ctx, mainSource, t0, t1, xOf, lo, hi, h, width, p.filter);
       }
-      ctx.stroke();
+      drawPitchLine(ctx, mainSource, t0, t1, xOf, yOf, p.filter);
 
-      // Current point
-      const current = sampleRef.current;
-      if (current.midi != null) {
-        const y = mapMidiToY(current.midi, h);
-        const x = width - 2;
-
-        const noteIndex = midiToNoteIndex(current.midi);
-        const pitchStyle = PITCH_COLOR_SHAPE_MAP[noteIndex];
-        const markerColor = colorizeMarker ? `rgb(${pitchStyle.rgb})` : '#0f172a';
-        const markerShape = colorizeMarker ? pitchStyle.shape : 'circle';
-
-        drawMarker(ctx, x, y, 5, markerShape, markerColor);
-
-        ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 13px sans-serif';
-        ctx.textAlign = 'right';
-        ctx.fillText(formatNoteLabel(current.midi), width - 10, y - 10);
+      if (mode.kind === 'timeline') {
+        drawVerticalLine(ctx, markerX, h, '#94a3b8', 1, 0.7);
       }
 
-      if (showDiagnostics) {
-        fpsRef.current.frames += 1;
-        const fpsElapsed = now - fpsRef.current.lastTime;
-        if (fpsElapsed >= 500) {
-          fpsRef.current.value = Math.round(
-            (fpsRef.current.frames * 1000) / fpsElapsed
+      const latest = p.engine.latest;
+      if (showMarker && latest && nowMs / 1000 - latest.time < MARKER_MAX_AGE) {
+        const midi = frameToMidi(latest.frequency, latest.clarity, p.filter);
+        if (midi !== null) {
+          const style = PITCH_COLOR_SHAPE_MAP[midiToNoteIndex(midi)];
+          const y = yOf(midi);
+          drawMarker(
+            ctx,
+            markerX,
+            y,
+            mode.kind === 'live' ? 5 : 7,
+            p.colorizeMarker ? style.shape : 'circle',
+            p.colorizeMarker ? `rgb(${style.rgb})` : '#0f172a',
           );
-          fpsRef.current.frames = 0;
-          fpsRef.current.lastTime = now;
+          ctx.fillStyle = '#0f172a';
+          ctx.font = 'bold 13px sans-serif';
+          ctx.textAlign = 'right';
+          ctx.fillText(formatNoteLabel(midi), Math.max(110, markerX - 10), y - 10);
         }
+      }
 
+      if (p.showDiagnostics) {
+        fps.frames += 1;
+        if (nowMs - fps.last >= 500) {
+          fps.value = Math.round((fps.frames * 1000) / (nowMs - fps.last));
+          fps.frames = 0;
+          fps.last = nowMs;
+        }
+        const det = p.engine.detectionsPerSecond;
         ctx.save();
         ctx.fillStyle = '#0f172a';
         ctx.font = '12px monospace';
         ctx.textAlign = 'right';
-        ctx.fillText(`${fpsRef.current.value} FPS`, width - 8, 16);
-        ctx.fillText(`${detectionsRef.current} det/s`, width - 8, 32);
-        const detMs =
-          detectionsRef.current > 0
-            ? (1000 / detectionsRef.current).toFixed(2)
-            : '0.00';
-        ctx.fillText(`${detMs} ms`, width - 8, 48);
-        ctx.fillText(`${rafFpsRef.current.value} rAF`, width - 8, 64);
+        ctx.fillText(`${fps.value} FPS`, width - 8, 16);
+        ctx.fillText(`${det} det/s`, width - 8, 32);
+        ctx.fillText(`${det > 0 ? (1000 / det).toFixed(2) : '0.00'} ms`, width - 8, 48);
         ctx.restore();
       }
-
-      rafId = requestAnimationFrame(draw);
     };
 
     rafId = requestAnimationFrame(draw);
-
     return () => cancelAnimationFrame(rafId);
-  }, [
-    historyDuration,
-    colorizeMarker,
-    showNoteLines,
-    showNoteTrails,
-    isRecording,
-    recordingStartAt,
-    maxFps,
-    showDiagnostics,
-  ]);
+  }, []);
+
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    const { mode, onSeek } = propsRef.current;
+    if (mode.kind !== 'timeline' || !onSeek) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const scrollLeft = mode.viewportRef.current?.scrollLeft ?? 0;
+    onSeek(Math.max(0, (scrollLeft + event.clientX - rect.left) / mode.pixelsPerSecond));
+  };
 
   return (
-    <div className="pitch-graph">
+    <div className={`pitch-graph${className ? ` ${className}` : ''}`} onClick={handleClick}>
       <canvas ref={canvasRef} />
     </div>
   );
 }
 
-function mapMidiToY(midi: number, height: number) {
-  const clamped = Math.max(LOWEST_NOTE, Math.min(HIGHEST_NOTE, midi));
-  const range = HIGHEST_NOTE - LOWEST_NOTE;
-  const normalized = (HIGHEST_NOTE - clamped) / range;
-  return normalized * height;
+function mapMidiToY(midi: number, height: number, lo: number, hi: number) {
+  const clamped = Math.max(lo, Math.min(hi, midi));
+  return ((hi - clamped) / (hi - lo)) * height;
 }
 
 function drawStaticLayer(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  showNoteLines: boolean
+  lo: number,
+  hi: number,
+  showNoteLines: boolean,
 ) {
+  ctx.clearRect(0, 0, width, height);
+  ctx.lineWidth = 1;
+
   if (showNoteLines) {
     ctx.save();
     ctx.strokeStyle = '#e2e8f0';
-    ctx.lineWidth = 1;
     ctx.globalAlpha = 0.4;
-
-    for (let midi = LOWEST_NOTE; midi <= HIGHEST_NOTE; midi += 1) {
+    for (let midi = Math.ceil(lo); midi <= hi; midi += 1) {
       if (midiToNoteIndex(midi) === 0) continue;
-      const y = mapMidiToY(midi, height);
-
+      const y = mapMidiToY(midi, height, lo, hi);
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(width, y);
       ctx.stroke();
     }
-
     ctx.restore();
   }
 
-  // Octave lines
+  // Octave lines on every C in range.
   ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 1;
-
-  for (let octave = 2; octave <= 8; octave++) {
-    const midi = (octave + 1) * 12;
-    const y = mapMidiToY(midi, height);
-
+  ctx.fillStyle = '#64748b';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'left';
+  for (let midi = Math.ceil(lo / 12) * 12; midi <= hi; midi += 12) {
+    const y = mapMidiToY(midi, height, lo, hi);
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
     ctx.stroke();
-
-    ctx.fillStyle = '#64748b';
-    ctx.font = '12px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(`C${octave}`, 6, y - 4);
+    ctx.fillText(`C${midi / 12 - 1}`, 6, y - 4);
   }
+}
+
+type XOf = (time: number) => number;
+type YOf = (midi: number) => number;
+
+/** Dark pitch line, broken at unvoiced frames and gaps. */
+function drawPitchLine(
+  ctx: CanvasRenderingContext2D,
+  source: FrameSource,
+  t0: number,
+  t1: number,
+  xOf: XOf,
+  yOf: YOf,
+  filter: DetectionFilter,
+) {
+  ctx.save();
+  ctx.strokeStyle = TAKE_LINE;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  let drawing = false;
+  let previousTime = -Infinity;
+  source.forEachInRange(t0 - MAX_GAP_SECONDS, t1 + MAX_GAP_SECONDS, (time, frequency, clarity) => {
+    const midi = frameToMidi(frequency, clarity, filter);
+    if (midi === null || time - previousTime > MAX_GAP_SECONDS) drawing = false;
+    previousTime = time;
+    if (midi === null) return;
+    const x = xOf(time);
+    const y = yOf(midi);
+    if (drawing) {
+      ctx.lineTo(x, y);
+    } else {
+      ctx.moveTo(x, y);
+      drawing = true;
+    }
+  });
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Translucent note-height bars in each note's color. */
+function drawTrails(
+  ctx: CanvasRenderingContext2D,
+  source: FrameSource,
+  t0: number,
+  t1: number,
+  xOf: XOf,
+  lo: number,
+  hi: number,
+  h: number,
+  width: number,
+  filter: DetectionFilter,
+) {
+  ctx.save();
+  ctx.globalAlpha = 0.28;
+  let previous: { x: number; note: number; time: number } | null = null;
+
+  const flush = (endX: number) => {
+    if (!previous) return;
+    const startX = Math.max(0, Math.min(previous.x, endX));
+    const stopX = Math.min(width, Math.max(previous.x, endX));
+    if (stopX <= 0 || startX >= width) return;
+    const top = mapMidiToY(previous.note + 0.5, h, lo, hi);
+    const bottom = mapMidiToY(previous.note - 0.5, h, lo, hi);
+    ctx.fillStyle = `rgb(${PITCH_COLOR_SHAPE_MAP[midiToNoteIndex(previous.note)].rgb})`;
+    ctx.fillRect(startX, Math.min(top, bottom), Math.max(2, stopX - startX), Math.abs(bottom - top));
+  };
+
+  source.forEachInRange(t0 - MAX_GAP_SECONDS, t1, (time, frequency, clarity) => {
+    const midi = frameToMidi(frequency, clarity, filter);
+    const x = xOf(time);
+    if (previous) flush(time - previous.time <= MAX_GAP_SECONDS ? x : previous.x + 2);
+    previous = midi === null ? null : { x, note: Math.round(midi), time };
+  });
+  if (previous) flush((previous as { x: number }).x + 2);
+  ctx.restore();
+}
+
+/** The track's own pitch, drawn as a wide translucent line colored by note. */
+function drawReferenceContour(
+  ctx: CanvasRenderingContext2D,
+  source: FrameSource,
+  t0: number,
+  t1: number,
+  xOf: XOf,
+  yOf: YOf,
+  filter: DetectionFilter,
+) {
+  ctx.save();
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalAlpha = 0.5;
+
+  let currentNote: number | null = null;
+  let previous: { x: number; y: number; time: number } | null = null;
+
+  source.forEachInRange(t0 - MAX_GAP_SECONDS, t1 + MAX_GAP_SECONDS, (time, frequency, clarity) => {
+    const midi = frameToMidi(frequency, clarity, filter);
+    const continuous = previous !== null && time - previous.time <= MAX_GAP_SECONDS;
+    if (midi === null || !continuous) {
+      if (currentNote !== null) ctx.stroke();
+      currentNote = null;
+    }
+    if (midi === null) {
+      previous = null;
+      return;
+    }
+
+    const x = xOf(time);
+    const y = yOf(midi);
+    const note = Math.round(midi);
+    if (note !== currentNote) {
+      if (currentNote !== null) ctx.stroke();
+      ctx.strokeStyle = `rgb(${PITCH_COLOR_SHAPE_MAP[midiToNoteIndex(note)].rgb})`;
+      ctx.beginPath();
+      if (continuous && previous) {
+        ctx.moveTo(previous.x, previous.y);
+      } else {
+        ctx.moveTo(x, y);
+      }
+      currentNote = note;
+    }
+    ctx.lineTo(x, y);
+    previous = { x, y, time };
+  });
+  if (currentNote !== null) ctx.stroke();
+  ctx.restore();
+}
+
+function drawVerticalLine(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  h: number,
+  color: string,
+  lineWidth: number,
+  alpha: number,
+) {
+  if (!Number.isFinite(x)) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, h);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawMarker(
@@ -503,16 +450,13 @@ function drawMarker(
   y: number,
   radius: number,
   shape: 'square' | 'circle',
-  fill: string
+  fill: string,
 ) {
   ctx.fillStyle = fill;
-
   if (shape === 'square') {
-    const size = radius * 2;
-    ctx.fillRect(x - radius, y - radius, size, size);
+    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
     return;
   }
-
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fill();

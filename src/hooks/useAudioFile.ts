@@ -57,7 +57,7 @@ export const useAudioFile = () => {
 
       setAudioBuffer(decoded)
       setDuration(decoded.duration)
-    } catch (decodeError) {
+    } catch {
       setError('Unable to decode this audio file.')
       setAudioBuffer(null)
     } finally {

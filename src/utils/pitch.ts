@@ -23,8 +23,40 @@ export const PITCH_COLOR_SHAPE_MAP: Record<NoteIndex, PitchColorShape> = {
   11: { color: 'yellow-green', shape: 'circle', rgb: '172,207,67' },
 };
 
+/** What the stats panel shows. `midi` is null when the frame fails the filter. */
+export type PitchSample = {
+  timestamp: number;
+  frequency: number | null;
+  clarity: number | null;
+  midi: number | null;
+};
+
+/** Which raw frames count as a detected note. Applied at draw/export time, not at detection. */
+export type DetectionFilter = {
+  clarityThreshold: number; // 0..1
+  centsThreshold: number; // 0..50; 50 or more disables the cents gate
+  minMidi: number;
+  maxMidi: number;
+};
+
 export function frequencyToMidi(frequency: number): number {
   return 69 + 12 * Math.log2(frequency / 440);
+}
+
+/** Returns the fractional MIDI note for a raw frame, or null if it fails the filter. */
+export function frameToMidi(
+  frequency: number,
+  clarity: number,
+  filter: DetectionFilter,
+): number | null {
+  if (!(frequency > 0) || !(clarity >= filter.clarityThreshold)) return null;
+  const midi = frequencyToMidi(frequency);
+  if (midi < filter.minMidi || midi > filter.maxMidi) return null;
+  if (filter.centsThreshold < 50) {
+    const cents = Math.abs(midi - Math.round(midi)) * 100;
+    if (cents > filter.centsThreshold) return null;
+  }
+  return midi;
 }
 
 export function midiToNoteIndex(midi: number): NoteIndex {

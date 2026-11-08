@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import {
   PIXELS_PER_SECOND,
@@ -21,8 +21,12 @@ type Props = {
   isPlaying: boolean
   currentTime: number
   onSeek: (time: number) => void
+  onWaveformClick?: (time: number) => void
+  onHoverTimeChange?: (time: number | null) => void
   viewMode: 'pan' | 'select'
-  panMode: 'scroll' | 'scrub'
+  panMode?: 'scroll' | 'scrub'
+  /** Lets a sibling (the Studio pitch graph) read this viewport's scroll position. */
+  viewportRef?: RefObject<HTMLDivElement | null>
   selection: { start: number; end: number } | null
   onSelectionChange: (selection: { start: number; end: number } | null) => void
 }
@@ -34,8 +38,11 @@ export const WaveformViewer = ({
   isPlaying,
   currentTime,
   onSeek,
+  onWaveformClick,
+  onHoverTimeChange,
   viewMode,
-  panMode,
+  panMode = 'scroll',
+  viewportRef: externalViewportRef,
   selection,
   onSelectionChange,
 }: Props) => {
@@ -44,6 +51,15 @@ export const WaveformViewer = ({
   const hoverLineRef = useRef<HTMLDivElement>(null)
   const hoverOffsetRef = useRef<number | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
+
+  // Expose the scroll container to the parent (the Studio pitch graph reads its scrollLeft).
+  useLayoutEffect(() => {
+    if (!externalViewportRef) return
+    externalViewportRef.current = viewportRef.current
+    return () => {
+      externalViewportRef.current = null
+    }
+  }, [externalViewportRef])
   const rafRef = useRef<number | null>(null)
   const dragRef = useRef<
     | {
@@ -135,6 +151,19 @@ export const WaveformViewer = ({
     const maxTime = getMaxTime()
     return Math.max(0, Math.min(time, maxTime))
   }
+
+  const calculateHoverTime = useCallback(
+    (offsetX: number) => {
+      const viewport = viewportRef.current
+      if (!viewport || waveformWidth === 0) return null
+
+      const absoluteX = viewport.scrollLeft + offsetX
+      const hoverTime = absoluteX / PIXELS_PER_SECOND
+      const maxTime = duration || audioRef.current?.duration || 0
+      return Math.max(0, Math.min(hoverTime, maxTime))
+    },
+    [duration, audioRef, waveformWidth],
+  )
 
   const getPointerPosition = (event: React.PointerEvent<HTMLDivElement>) => {
     const viewport = viewportRef.current
@@ -254,6 +283,13 @@ export const WaveformViewer = ({
       const audio = audioRef.current
       if (!audio) return
       scrollToTime(audio.currentTime)
+
+      // Also update hover time during playback since the waveform scrolls under the cursor
+      if (hoverOffsetRef.current !== null) {
+        const hoverTime = calculateHoverTime(hoverOffsetRef.current)
+        onHoverTimeChange?.(hoverTime)
+      }
+
       rafRef.current = requestAnimationFrame(update)
     }
 
@@ -265,7 +301,7 @@ export const WaveformViewer = ({
         rafRef.current = null
       }
     }
-  }, [audioRef, isPlaying, scrollToTime])
+  }, [audioRef, isPlaying, scrollToTime, calculateHoverTime, onHoverTimeChange])
 
   useEffect(() => {
     const handleResize = () => {
@@ -293,8 +329,13 @@ export const WaveformViewer = ({
     const maxTime = duration || audioRef.current?.duration || 0
     const clampedTime = Math.max(0, Math.min(nextTime, maxTime))
 
+    if (isPlaying) {
+      audioRef.current?.pause()
+    }
+
     onSeek(clampedTime)
     scrollToTime(clampedTime)
+    onWaveformClick?.(clampedTime)
   }
 
   const handleWaveformMove = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -305,6 +346,9 @@ export const WaveformViewer = ({
     const rect = viewport.getBoundingClientRect()
     const offsetX = event.clientX - rect.left
     updateHoverLine(offsetX)
+
+    const hoverTime = calculateHoverTime(offsetX)
+    onHoverTimeChange?.(hoverTime)
   }
 
   const handleWaveformLeave = () => {
@@ -313,6 +357,7 @@ export const WaveformViewer = ({
     if (hoverLine) {
       hoverLine.style.opacity = '0'
     }
+    onHoverTimeChange?.(null)
   }
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -528,7 +573,7 @@ export const WaveformViewer = ({
           )}
         </>
       ) : (
-        <div className="waveform-placeholder">Upload an MP3 to see the waveform.</div>
+        <div className="waveform-placeholder">Load an MP3 to see the waveform.</div>
       )}
       <div ref={hoverLineRef} className="waveform-hover-line" aria-hidden="true" />
       <div ref={playheadRef} className="waveform-playhead" aria-hidden="true" />

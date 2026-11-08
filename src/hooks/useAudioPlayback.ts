@@ -48,14 +48,18 @@ export const useAudioPlayback = ({ onPlayError }: Options = {}): AudioPlayback =
     }
   }, [])
 
-  // High-frequency updates during playback for smooth UI
+  // Timecode updates during playback. Throttled to ~30 Hz: the waveform and
+  // pitch graph animate from their own rAF loops, so this only drives text and
+  // doesn't need to re-render the page every frame.
   useEffect(() => {
     if (!isPlaying) return
 
     let rafId: number
-    const update = () => {
+    let lastUpdate = 0
+    const update = (now: number) => {
       const audio = audioRef.current
-      if (audio) {
+      if (audio && now - lastUpdate >= 33) {
+        lastUpdate = now
         setCurrentTime(audio.currentTime)
       }
       rafId = requestAnimationFrame(update)

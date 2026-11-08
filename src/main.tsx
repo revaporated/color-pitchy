@@ -1,18 +1,18 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
-import SongsPage from './pages/Songs'
-import StudioPage from './pages/Studio' // 1. Import the Studio page
+import StudioPage from './pages/Studio'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<App />} />
-        <Route path="/songs" element={<SongsPage />} />
-        <Route path="/studio" element={<StudioPage />} /> {/* 2. Add the route */}
+        <Route path="/studio" element={<StudioPage />} />
+        {/* The old Songs page is now Studio with the mic off. */}
+        <Route path="/songs" element={<Navigate to="/studio" replace />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

@@ -1,6 +1,5 @@
 import { FiBarChart2, FiEyeOff } from 'react-icons/fi';
-import type { PitchSample } from '../hooks/usePitchDetector';
-import { formatNoteLabel } from '../utils/pitch';
+import { formatNoteLabel, type PitchSample } from '../utils/pitch';
 
 type Props = {
   sample: PitchSample;

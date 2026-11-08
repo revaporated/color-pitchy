@@ -6,6 +6,8 @@ type Props = {
   hasAudio: boolean
   currentTime: number
   duration: number
+  /** Time under the mouse on the waveform, shown next to the timecode. */
+  hoverTime?: number | null
   viewMode: 'pan' | 'select'
   panMode: 'scroll' | 'scrub'
   loopEnabled: boolean
@@ -34,6 +36,7 @@ export const PlaybackControls = ({
   hasAudio,
   currentTime,
   duration,
+  hoverTime = null,
   viewMode,
   panMode,
   loopEnabled,
@@ -71,6 +74,9 @@ export const PlaybackControls = ({
         {hasAudio && duration > 0 && (
           <span className="file-meta">
             {formatTimecode(displayTime)}/{formatTimecode(duration)}
+            {hoverTime !== null && (
+              <span className="hover-timecode"> [{formatTimecode(hoverTime)}]</span>
+            )}
           </span>
         )}
       </div>
