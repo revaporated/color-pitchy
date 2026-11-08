@@ -8,6 +8,11 @@ type Options = {
 type AudioPlayback = {
   audioRef: RefObject<HTMLAudioElement>
   isPlaying: boolean
+  /**
+   * Song position as of the last pause, seek, stop or end. Deliberately not
+   * updated during playback: anything animated reads the PlaybackClock on the
+   * shared frame loop instead, so playing never re-renders the page.
+   */
   currentTime: number
   playPause: () => void
   stop: () => void
@@ -25,49 +30,33 @@ export const useAudioPlayback = ({ onPlayError }: Options = {}): AudioPlayback =
     if (!audio) return
 
     const handlePlay = () => setIsPlaying(true)
-    const handlePause = () => setIsPlaying(false)
+    const handlePause = () => {
+      setIsPlaying(false)
+      setCurrentTime(audio.currentTime)
+    }
     const handleEnded = () => {
       setIsPlaying(false)
       setCurrentTime(audio.duration || audio.currentTime)
     }
-    const handleTimeUpdate = () => {
-      // Still sync on standard timeupdate events
-      setCurrentTime(audio.currentTime)
+    const handleSeeked = () => {
+      if (audio.paused) setCurrentTime(audio.currentTime)
     }
+    const handleLoaded = () => setCurrentTime(audio.currentTime)
 
     audio.addEventListener('play', handlePlay)
     audio.addEventListener('pause', handlePause)
     audio.addEventListener('ended', handleEnded)
-    audio.addEventListener('timeupdate', handleTimeUpdate)
+    audio.addEventListener('seeked', handleSeeked)
+    audio.addEventListener('loadedmetadata', handleLoaded)
 
     return () => {
       audio.removeEventListener('play', handlePlay)
       audio.removeEventListener('pause', handlePause)
       audio.removeEventListener('ended', handleEnded)
-      audio.removeEventListener('timeupdate', handleTimeUpdate)
+      audio.removeEventListener('seeked', handleSeeked)
+      audio.removeEventListener('loadedmetadata', handleLoaded)
     }
   }, [])
-
-  // Timecode updates during playback. Throttled to ~30 Hz: the waveform and
-  // pitch graph animate from their own rAF loops, so this only drives text and
-  // doesn't need to re-render the page every frame.
-  useEffect(() => {
-    if (!isPlaying) return
-
-    let rafId: number
-    let lastUpdate = 0
-    const update = (now: number) => {
-      const audio = audioRef.current
-      if (audio && now - lastUpdate >= 33) {
-        lastUpdate = now
-        setCurrentTime(audio.currentTime)
-      }
-      rafId = requestAnimationFrame(update)
-    }
-
-    rafId = requestAnimationFrame(update)
-    return () => cancelAnimationFrame(rafId)
-  }, [isPlaying])
 
   const playPause = useCallback(() => {
     const audio = audioRef.current
@@ -97,7 +86,7 @@ export const useAudioPlayback = ({ onPlayError }: Options = {}): AudioPlayback =
     if (!audio) return
 
     audio.currentTime = time
-    setCurrentTime(time)
+    if (audio.paused) setCurrentTime(time)
   }, [])
 
   return { audioRef: audioElementRef, isPlaying, currentTime, playPause, stop, seek }

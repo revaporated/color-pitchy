@@ -5,14 +5,13 @@ import { FrameRing } from './audio/frames';
 import { NavBar } from './components/NavBar';
 import { PitchControls } from './components/PitchControls';
 import { PitchGraph } from './components/PitchGraph';
-import { PitchStats } from './components/PitchStats';
+import { EngineStats } from './components/EngineStats';
 import { RecordingControls } from './components/RecordingControls';
 import { useLiveRecording } from './hooks/useLiveRecording';
-import { useEngineStats, usePitchEngine } from './hooks/usePitchEngine';
+import { usePitchEngine } from './hooks/usePitchEngine';
 import { usePitchSettings } from './hooks/usePitchSettings';
 import './index.css';
 
-const GRAPH_MAX_FPS = 165;
 const LIVE_HISTORY_CAPACITY = 4096; // > 10 s at the detection rate
 
 /** Live mode: mic pitch on a rolling graph, independent of any audio. */
@@ -26,7 +25,6 @@ export default function App() {
   const [ring] = useState(() => new FrameRing(LIVE_HISTORY_CAPACITY));
 
   const { engine, error } = usePitchEngine({ armed, fftSize: controls.fftSize });
-  const { sample } = useEngineStats(engine, filter);
   const recording = useLiveRecording(engine);
 
   useEffect(() => engine.subscribe((frame) => ring.push(frame)), [engine, ring]);
@@ -78,7 +76,6 @@ export default function App() {
           showNoteTrails={controls.showNoteTrails}
           showDiagnostics={controls.showDiagnostics}
           height={isFullscreen ? undefined : 320}
-          maxFps={GRAPH_MAX_FPS}
         />
       </div>
       <div className="graph-actions">
@@ -103,8 +100,9 @@ export default function App() {
             collapsed={controlsCollapsed}
             onToggleCollapsed={() => setControlsCollapsed((value) => !value)}
           />
-          <PitchStats
-            sample={sample}
+          <EngineStats
+            engine={engine}
+            filter={filter}
             isFullscreen
             collapsed={statsCollapsed}
             onToggleCollapsed={() => setStatsCollapsed((value) => !value)}
@@ -124,7 +122,7 @@ export default function App() {
       ) : (
         <>
           <PitchControls {...controls} enabled={armed} setEnabled={setArmedAndFreeze} />
-          <PitchStats sample={sample} />
+          <EngineStats engine={engine} filter={filter} />
         </>
       )}
     </div>

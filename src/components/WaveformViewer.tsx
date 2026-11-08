@@ -1,11 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
+import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop'
+import type { PlaybackClock } from '../audio/playbackClock'
 import {
   PIXELS_PER_SECOND,
   PLAYHEAD_WIDTH,
   WAVEFORM_HEIGHT,
   buildPeaks,
 } from '../utils/waveform'
+
+// Browsers cap canvas size (about 32k px per side), so the waveform is drawn
+// as a row of tiles instead of one canvas as wide as the song.
+const TILE_WIDTH = 4096
 
 const formatMarkerLabel = (seconds: number) => {
   const minutes = Math.floor(seconds / 60)
@@ -22,7 +28,10 @@ type Props = {
   currentTime: number
   onSeek: (time: number) => void
   onWaveformClick?: (time: number) => void
-  onHoverTimeChange?: (time: number | null) => void
+  /** Written with the time under the mouse (or null); read by the timecode readout. */
+  hoverTimeRef?: RefObject<number | null>
+  /** Smoothed song clock. When given, playback scrolling follows it instead of the stepwise audio.currentTime. */
+  clock?: PlaybackClock
   viewMode: 'pan' | 'select'
   panMode?: 'scroll' | 'scrub'
   /** Lets a sibling (the Studio pitch graph) read this viewport's scroll position. */
@@ -39,14 +48,15 @@ export const WaveformViewer = ({
   currentTime,
   onSeek,
   onWaveformClick,
-  onHoverTimeChange,
+  hoverTimeRef,
+  clock,
   viewMode,
   panMode = 'scroll',
   viewportRef: externalViewportRef,
   selection,
   onSelectionChange,
 }: Props) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const tileRefs = useRef<Array<HTMLCanvasElement | null>>([])
   const playheadRef = useRef<HTMLDivElement>(null)
   const hoverLineRef = useRef<HTMLDivElement>(null)
   const hoverOffsetRef = useRef<number | null>(null)
@@ -60,7 +70,6 @@ export const WaveformViewer = ({
       externalViewportRef.current = null
     }
   }, [externalViewportRef])
-  const rafRef = useRef<number | null>(null)
   const dragRef = useRef<
     | {
         type: 'pan-scroll'
@@ -102,6 +111,7 @@ export const WaveformViewer = ({
     [audioBuffer],
   )
   const waveformWidth = peaks?.length ?? 0
+  const tileCount = Math.ceil(waveformWidth / TILE_WIDTH)
   const hasWaveform = Boolean(peaks)
   const markers = useMemo(() => {
     if (!duration || waveformWidth === 0) return []
@@ -193,7 +203,7 @@ export const WaveformViewer = ({
       const maxLeft = Math.max(0, waveformWidth - 1)
       const clampedLeft = Math.max(0, Math.min(absoluteX, maxLeft))
 
-      hoverLine.style.left = `${clampedLeft}px`
+      hoverLine.style.transform = `translateX(${clampedLeft}px)`
       hoverLine.style.opacity = '1'
     },
     [waveformWidth],
@@ -221,7 +231,7 @@ export const WaveformViewer = ({
         const maxPlayheadLeft = Math.max(0, viewportWidth - PLAYHEAD_WIDTH)
         const playheadLeft = Math.max(0, Math.min(rawPlayheadLeft, maxPlayheadLeft))
         const compensatedLeft = playheadLeft + activeScrollLeft
-        playhead.style.left = `${compensatedLeft}px`
+        playhead.style.transform = `translateX(${compensatedLeft}px)`
       }
 
       updateHoverLine()
@@ -230,33 +240,33 @@ export const WaveformViewer = ({
   )
 
   useEffect(() => {
-    if (!peaks || !canvasRef.current) return
+    if (!peaks) return
 
-    const canvas = canvasRef.current
     const dpr = window.devicePixelRatio || 1
-    const width = peaks.length
     const height = WAVEFORM_HEIGHT
-    const context = canvas.getContext('2d')
-
-    if (!context) return
-
-    canvas.width = width * dpr
-    canvas.height = height * dpr
-    canvas.style.width = `${width}px`
-    canvas.style.height = `${height}px`
-
-    context.setTransform(dpr, 0, 0, dpr, 0, 0)
-    context.clearRect(0, 0, width, height)
-    context.fillStyle = '#f97316'
-
     const mid = height / 2
 
-    for (let x = 0; x < width; x += 1) {
-      const value = peaks[x]
-      const barHeight = Math.max(1, value * mid)
-      context.fillRect(x, mid - barHeight, 1, barHeight * 2)
+    for (let tile = 0; tile < tileCount; tile += 1) {
+      const canvas = tileRefs.current[tile]
+      const context = canvas?.getContext('2d')
+      if (!canvas || !context) continue
+
+      const start = tile * TILE_WIDTH
+      const width = Math.min(TILE_WIDTH, peaks.length - start)
+      canvas.width = Math.round(width * dpr)
+      canvas.height = Math.round(height * dpr)
+      canvas.style.width = `${width}px`
+      canvas.style.height = `${height}px`
+
+      context.setTransform(dpr, 0, 0, dpr, 0, 0)
+      context.clearRect(0, 0, width, height)
+      context.fillStyle = '#f97316'
+      for (let x = 0; x < width; x += 1) {
+        const barHeight = Math.max(1, peaks[start + x] * mid)
+        context.fillRect(x, mid - barHeight, 1, barHeight * 2)
+      }
     }
-  }, [peaks])
+  }, [peaks, tileCount])
 
   useEffect(() => {
     if (audioBuffer) {
@@ -271,37 +281,19 @@ export const WaveformViewer = ({
   }, [currentTime, isPlaying, scrollToTime])
 
   useEffect(() => {
-    if (!isPlaying) {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-      return
-    }
+    if (!isPlaying) return
 
-    const update = () => {
+    return onAnimationFrame((now) => {
       const audio = audioRef.current
       if (!audio) return
-      scrollToTime(audio.currentTime)
+      scrollToTime(clock ? clock.songTimeAt(now) : audio.currentTime)
 
-      // Also update hover time during playback since the waveform scrolls under the cursor
-      if (hoverOffsetRef.current !== null) {
-        const hoverTime = calculateHoverTime(hoverOffsetRef.current)
-        onHoverTimeChange?.(hoverTime)
+      // The waveform scrolls under a stationary cursor, so the hover time changes too.
+      if (hoverTimeRef && hoverOffsetRef.current !== null) {
+        hoverTimeRef.current = calculateHoverTime(hoverOffsetRef.current)
       }
-
-      rafRef.current = requestAnimationFrame(update)
-    }
-
-    rafRef.current = requestAnimationFrame(update)
-
-    return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-    }
-  }, [audioRef, isPlaying, scrollToTime, calculateHoverTime, onHoverTimeChange])
+    }, FRAME_ORDER.waveform)
+  }, [audioRef, clock, isPlaying, scrollToTime, calculateHoverTime, hoverTimeRef])
 
   useEffect(() => {
     const handleResize = () => {
@@ -347,8 +339,7 @@ export const WaveformViewer = ({
     const offsetX = event.clientX - rect.left
     updateHoverLine(offsetX)
 
-    const hoverTime = calculateHoverTime(offsetX)
-    onHoverTimeChange?.(hoverTime)
+    if (hoverTimeRef) hoverTimeRef.current = calculateHoverTime(offsetX)
   }
 
   const handleWaveformLeave = () => {
@@ -357,7 +348,7 @@ export const WaveformViewer = ({
     if (hoverLine) {
       hoverLine.style.opacity = '0'
     }
-    onHoverTimeChange?.(null)
+    if (hoverTimeRef) hoverTimeRef.current = null
   }
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -560,7 +551,20 @@ export const WaveformViewer = ({
               </div>
             ))}
           </div>
-          <canvas ref={canvasRef} className="waveform-canvas" />
+          <div
+            className="waveform-canvas"
+            style={{ width: `${waveformWidth}px`, height: `${WAVEFORM_HEIGHT}px` }}
+          >
+            {Array.from({ length: tileCount }, (_, tile) => (
+              <canvas
+                key={tile}
+                ref={(element) => {
+                  tileRefs.current[tile] = element
+                }}
+                style={{ left: `${tile * TILE_WIDTH}px` }}
+              />
+            ))}
+          </div>
           {selectionPixels && (
             <div
               className="waveform-selection"

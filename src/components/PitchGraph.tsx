@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { MouseEvent, RefObject } from 'react';
 import type { FrameSource } from '../audio/frames';
+import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import type { PitchEngine } from '../audio/pitchEngine';
 import type { PlaybackClock } from '../audio/playbackClock';
 import {
@@ -29,6 +30,10 @@ export type TimelineGraphMode = {
   pixelsPerSecond: number;
   clock: PlaybackClock;
   take: FrameSource;
+  /** Recent mic pitch shown behind the playhead when not recording a take. */
+  preview: FrameSource | null;
+  /** How many seconds of `preview` to show behind the playhead. */
+  previewSeconds: number;
   reference: FrameSource | null;
   referenceFilter: DetectionFilter;
   /** Draw the current mic pitch at the playhead. */
@@ -44,7 +49,6 @@ type Props = {
   showNoteTrails: boolean;
   showDiagnostics: boolean;
   height?: number;
-  maxFps?: number;
   /** Timeline only: clicking the graph seeks here (seconds). */
   onSeek?: (time: number) => void;
   className?: string;
@@ -54,6 +58,12 @@ const BACKGROUND = '#f8fafc';
 const TAKE_LINE = '#334155';
 const MAX_GAP_SECONDS = 0.06; // break lines across gaps longer than this
 const MARKER_MAX_AGE = 0.25; // seconds; older frames don't get a "current" marker
+const TRAIL_ALPHA = 0.28;
+const REFERENCE_ALPHA = 0.16;
+// Built once so the draw loop doesn't allocate a color string per rectangle.
+const NOTE_FILL = Array.from({ length: 12 }, (_, i) =>
+  `rgb(${PITCH_COLOR_SHAPE_MAP[i as keyof typeof PITCH_COLOR_SHAPE_MAP].rgb})`,
+);
 
 export function PitchGraph(props: Props) {
   const { height, className } = props;
@@ -90,24 +100,20 @@ export function PitchGraph(props: Props) {
   }, [height]);
 
   useEffect(() => {
-    let rafId = 0;
-    let lastDraw = 0;
     let canvasKey = '';
     let staticKey = '';
     const staticCanvas = document.createElement('canvas');
     const fps = { last: performance.now(), frames: 0, value: 0 };
 
-    const draw = () => {
-      rafId = requestAnimationFrame(draw);
+    // `frameNow` is the rAF timestamp shared by every callback in this frame,
+    // so the graph and the waveform compute song time from the same instant.
+    const draw = (frameNow: number) => {
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
       if (!canvas || !ctx) return;
 
       const p = propsRef.current;
-      const nowMs = performance.now();
-      const maxFps = p.maxFps ?? 165;
-      if (maxFps > 0 && nowMs - lastDraw < 1000 / maxFps) return;
-      lastDraw = nowMs;
+      const nowMs = frameNow;
 
       const { width, height: h } = sizeRef.current;
       const dpr = window.devicePixelRatio || 1;
@@ -151,6 +157,7 @@ export function PitchGraph(props: Props) {
       let markerX: number;
       let showMarker: boolean;
       let mainSource: FrameSource;
+      let preview: { source: FrameSource; t0: number; t1: number } | null = null;
 
       if (mode.kind === 'live') {
         t1 = mode.frozenAt ?? nowMs / 1000;
@@ -165,7 +172,6 @@ export function PitchGraph(props: Props) {
           drawVerticalLine(ctx, xOf(mode.recordingStartAt), h, '#ef4444', 2, 0.7);
         }
       } else {
-        mode.clock.sync();
         const viewport = mode.viewportRef.current;
         const scrollLeft = viewport?.scrollLeft ?? 0;
         const pps = mode.pixelsPerSecond;
@@ -178,14 +184,27 @@ export function PitchGraph(props: Props) {
         mainSource = mode.take;
 
         if (mode.reference) {
-          drawReferenceContour(ctx, mode.reference, t0, t1, xOf, yOf, mode.referenceFilter);
+          drawTrails(ctx, mode.reference, t0, t1, xOf, lo, hi, h, width, mode.referenceFilter, REFERENCE_ALPHA);
+        }
+        if (mode.preview) {
+          preview = {
+            source: mode.preview,
+            t0: Math.max(t0, songNow - mode.previewSeconds),
+            t1: Math.min(t1, songNow),
+          };
         }
       }
 
       if (p.showNoteTrails) {
-        drawTrails(ctx, mainSource, t0, t1, xOf, lo, hi, h, width, p.filter);
+        drawTrails(ctx, mainSource, t0, t1, xOf, lo, hi, h, width, p.filter, TRAIL_ALPHA);
+        if (preview && preview.t1 > preview.t0) {
+          drawTrails(ctx, preview.source, preview.t0, preview.t1, xOf, lo, hi, h, width, p.filter, TRAIL_ALPHA);
+        }
       }
       drawPitchLine(ctx, mainSource, t0, t1, xOf, yOf, p.filter);
+      if (preview && preview.t1 > preview.t0) {
+        drawPitchLine(ctx, preview.source, preview.t0, preview.t1, xOf, yOf, p.filter, 0);
+      }
 
       if (mode.kind === 'timeline') {
         drawVerticalLine(ctx, markerX, h, '#94a3b8', 1, 0.7);
@@ -231,8 +250,7 @@ export function PitchGraph(props: Props) {
       }
     };
 
-    rafId = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(rafId);
+    return onAnimationFrame(draw, FRAME_ORDER.graph);
   }, []);
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
@@ -308,6 +326,8 @@ function drawPitchLine(
   xOf: XOf,
   yOf: YOf,
   filter: DetectionFilter,
+  /** Extra time read past each edge so lines run off-canvas instead of stopping short. */
+  margin = MAX_GAP_SECONDS,
 ) {
   ctx.save();
   ctx.strokeStyle = TAKE_LINE;
@@ -316,7 +336,7 @@ function drawPitchLine(
   ctx.beginPath();
   let drawing = false;
   let previousTime = -Infinity;
-  source.forEachInRange(t0 - MAX_GAP_SECONDS, t1 + MAX_GAP_SECONDS, (time, frequency, clarity) => {
+  source.forEachInRange(t0 - margin, t1 + margin, (time, frequency, clarity) => {
     const midi = frameToMidi(frequency, clarity, filter);
     if (midi === null || time - previousTime > MAX_GAP_SECONDS) drawing = false;
     previousTime = time;
@@ -346,9 +366,10 @@ function drawTrails(
   h: number,
   width: number,
   filter: DetectionFilter,
+  alpha: number,
 ) {
   ctx.save();
-  ctx.globalAlpha = 0.28;
+  ctx.globalAlpha = alpha;
   let previous: { x: number; note: number; time: number } | null = null;
 
   const flush = (endX: number) => {
@@ -358,7 +379,7 @@ function drawTrails(
     if (stopX <= 0 || startX >= width) return;
     const top = mapMidiToY(previous.note + 0.5, h, lo, hi);
     const bottom = mapMidiToY(previous.note - 0.5, h, lo, hi);
-    ctx.fillStyle = `rgb(${PITCH_COLOR_SHAPE_MAP[midiToNoteIndex(previous.note)].rgb})`;
+    ctx.fillStyle = NOTE_FILL[midiToNoteIndex(previous.note)];
     ctx.fillRect(startX, Math.min(top, bottom), Math.max(2, stopX - startX), Math.abs(bottom - top));
   };
 
@@ -369,58 +390,6 @@ function drawTrails(
     previous = midi === null ? null : { x, note: Math.round(midi), time };
   });
   if (previous) flush((previous as { x: number }).x + 2);
-  ctx.restore();
-}
-
-/** The track's own pitch, drawn as a wide translucent line colored by note. */
-function drawReferenceContour(
-  ctx: CanvasRenderingContext2D,
-  source: FrameSource,
-  t0: number,
-  t1: number,
-  xOf: XOf,
-  yOf: YOf,
-  filter: DetectionFilter,
-) {
-  ctx.save();
-  ctx.lineWidth = 5;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.globalAlpha = 0.5;
-
-  let currentNote: number | null = null;
-  let previous: { x: number; y: number; time: number } | null = null;
-
-  source.forEachInRange(t0 - MAX_GAP_SECONDS, t1 + MAX_GAP_SECONDS, (time, frequency, clarity) => {
-    const midi = frameToMidi(frequency, clarity, filter);
-    const continuous = previous !== null && time - previous.time <= MAX_GAP_SECONDS;
-    if (midi === null || !continuous) {
-      if (currentNote !== null) ctx.stroke();
-      currentNote = null;
-    }
-    if (midi === null) {
-      previous = null;
-      return;
-    }
-
-    const x = xOf(time);
-    const y = yOf(midi);
-    const note = Math.round(midi);
-    if (note !== currentNote) {
-      if (currentNote !== null) ctx.stroke();
-      ctx.strokeStyle = `rgb(${PITCH_COLOR_SHAPE_MAP[midiToNoteIndex(note)].rgb})`;
-      ctx.beginPath();
-      if (continuous && previous) {
-        ctx.moveTo(previous.x, previous.y);
-      } else {
-        ctx.moveTo(x, y);
-      }
-      currentNote = note;
-    }
-    ctx.lineTo(x, y);
-    previous = { x, y, time };
-  });
-  if (currentNote !== null) ctx.stroke();
   ctx.restore();
 }
 

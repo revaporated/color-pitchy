@@ -1,13 +1,16 @@
+import { useEffect, useRef } from 'react'
 import { FiPause, FiPlay, FiSquare } from 'react-icons/fi'
+import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop'
 import { LuHand, LuTextCursor } from 'react-icons/lu'
 
 type Props = {
   isPlaying: boolean
   hasAudio: boolean
-  currentTime: number
+  /** Current song position; read every animation frame. */
+  getTime: () => number
   duration: number
-  /** Time under the mouse on the waveform, shown next to the timecode. */
-  hoverTime?: number | null
+  /** Time under the mouse on the waveform, shown next to the timecode; read every animation frame. */
+  getHoverTime?: () => number | null
   viewMode: 'pan' | 'select'
   panMode: 'scroll' | 'scrub'
   loopEnabled: boolean
@@ -34,9 +37,9 @@ const formatTimecode = (time: number) => {
 export const PlaybackControls = ({
   isPlaying,
   hasAudio,
-  currentTime,
+  getTime,
   duration,
-  hoverTime = null,
+  getHoverTime,
   viewMode,
   panMode,
   loopEnabled,
@@ -48,8 +51,6 @@ export const PlaybackControls = ({
   onToggleLoop,
   onClearSelection,
 }: Props) => {
-  const displayTime = duration > 0 ? Math.min(currentTime, duration) : currentTime
-
   return (
     <div className="playback-controls">
       <div className="playback-controls__row">
@@ -72,12 +73,7 @@ export const PlaybackControls = ({
           <FiSquare />
         </button>
         {hasAudio && duration > 0 && (
-          <span className="file-meta">
-            {formatTimecode(displayTime)}/{formatTimecode(duration)}
-            {hoverTime !== null && (
-              <span className="hover-timecode"> [{formatTimecode(hoverTime)}]</span>
-            )}
-          </span>
+          <Timecode getTime={getTime} getHoverTime={getHoverTime} duration={duration} />
         )}
       </div>
       <div className="playback-controls__row playback-controls__row--modes">
@@ -148,5 +144,45 @@ export const PlaybackControls = ({
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * Updates its own text on the shared animation loop, so playback never
+ * re-renders the page just to move the clock.
+ */
+function Timecode({
+  getTime,
+  getHoverTime,
+  duration,
+}: {
+  getTime: () => number
+  getHoverTime?: () => number | null
+  duration: number
+}) {
+  const timeRef = useRef<HTMLSpanElement>(null)
+  const hoverRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(
+    () =>
+      onAnimationFrame(() => {
+        const time = Math.min(Math.max(0, getTime()), duration)
+        const text = `${formatTimecode(time)}/${formatTimecode(duration)}`
+        if (timeRef.current && timeRef.current.textContent !== text) timeRef.current.textContent = text
+
+        const hover = getHoverTime?.() ?? null
+        const hoverText = hover === null ? '' : ` [${formatTimecode(hover)}]`
+        if (hoverRef.current && hoverRef.current.textContent !== hoverText) {
+          hoverRef.current.textContent = hoverText
+        }
+      }, FRAME_ORDER.text),
+    [duration, getHoverTime, getTime],
+  )
+
+  return (
+    <span className="file-meta">
+      <span ref={timeRef} />
+      <span ref={hoverRef} className="hover-timecode" />
+    </span>
   )
 }

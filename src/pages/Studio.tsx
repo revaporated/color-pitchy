@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { PitchTrack } from '../audio/frames';
+import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import { PlaybackClock } from '../audio/playbackClock';
 import { AudioUpload } from '../components/AudioUpload';
 import { NavBar } from '../components/NavBar';
 import { PitchControls } from '../components/PitchControls';
 import { PitchGraph } from '../components/PitchGraph';
-import { PitchStats } from '../components/PitchStats';
+import { EngineStats } from '../components/EngineStats';
 import { PlaybackControls } from '../components/PlaybackControls';
 import { StudioControls } from '../components/StudioControls';
 import { WaveformViewer } from '../components/WaveformViewer';
 import { useAudioFile } from '../hooks/useAudioFile';
 import { useAudioPlayback } from '../hooks/useAudioPlayback';
-import { useEngineStats, usePitchEngine } from '../hooks/usePitchEngine';
+import { usePitchEngine } from '../hooks/usePitchEngine';
 import { usePitchSettings, useStudioSettings } from '../hooks/usePitchSettings';
 import { useReferenceTrack } from '../hooks/useReferenceTrack';
 import { buildMidiFile, downloadBytes } from '../utils/midi';
@@ -50,7 +51,6 @@ export default function StudioPage() {
     fftSize: controls.fftSize,
     active: detectionActive,
   });
-  const { sample } = useEngineStats(engine, filter);
 
   // Song clock, take and reference
   const [clock] = useState(() => new PlaybackClock());
@@ -58,8 +58,14 @@ export default function StudioPage() {
     clock.attach(audioRef.current);
     return () => clock.attach(null);
   }, [clock, audioRef]);
+  // Sync the clock once per frame, before the waveform and graph read it.
+  useEffect(() => onAnimationFrame(() => clock.sync(), FRAME_ORDER.clock), [clock]);
 
+  // `take` keeps what you record. `preview` always follows the mic while the
+  // track plays and is drawn as a short trail behind the playhead when you
+  // aren't recording; it's cleared on every seek so it only shows this pass.
   const take = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
+  const preview = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
   const reference = useReferenceTrack(audioBuffer);
   const referenceFilter: DetectionFilter = useMemo(
     () => ({
@@ -82,14 +88,15 @@ export default function StudioPage() {
   useEffect(
     () =>
       engine.subscribe((frame) => {
-        if (!recordingRef.current) return;
         clock.sync();
         if (!clock.isPlaying) return;
         const perfMs = frame.time * 1000;
         if (perfMs < clock.discontinuityPerfMs) return; // sung before the last seek
-        take.write(clock.songTimeAt(perfMs) - offsetSecondsRef.current, frame.frequency, frame.clarity);
+        const songTime = clock.songTimeAt(perfMs) - offsetSecondsRef.current;
+        preview.write(songTime, frame.frequency, frame.clarity);
+        if (recordingRef.current) take.write(songTime, frame.frequency, frame.clarity);
       }),
-    [engine, clock, take],
+    [engine, clock, take, preview],
   );
 
   // Waveform view state
@@ -98,14 +105,21 @@ export default function StudioPage() {
   const [panMode, setPanMode] = useState<'scroll' | 'scrub'>('scroll');
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const hoverTimeRef = useRef<number | null>(null);
+  const getSongTime = useCallback(() => clock.songTimeAt(performance.now()), [clock]);
+  const getHoverTime = useCallback(() => hoverTimeRef.current, []);
+
+  const resetPreview = useCallback(() => {
+    take.breakContinuity();
+    preview.clear();
+  }, [preview, take]);
 
   const seekTo = useCallback(
     (time: number) => {
-      take.breakContinuity();
+      resetPreview();
       seek(Math.max(0, Math.min(time, duration || time)));
     },
-    [duration, seek, take],
+    [duration, resetPreview, seek],
   );
 
   const handleUpload = useCallback(
@@ -132,27 +146,24 @@ export default function StudioPage() {
     if (!isPlaying && loopEnabled && selection) {
       const start = Math.min(selection.start, selection.end);
       const end = Math.max(selection.start, selection.end);
-      if (currentTime < start || currentTime > end) seekTo(start);
+      const position = audioRef.current?.currentTime ?? 0;
+      if (position < start || position > end) seekTo(start);
     }
     playPause();
-  }, [currentTime, isPlaying, loopEnabled, playPause, seekTo, selection]);
+  }, [audioRef, isPlaying, loopEnabled, playPause, seekTo, selection]);
 
   // Loop the selection. Checked every animation frame against the audio element
-  // itself, since the React currentTime state is throttled.
+  // itself, since the React currentTime state isn't updated during playback.
   useEffect(() => {
     if (!isPlaying || !loopEnabled || !selection) return;
     const start = Math.min(selection.start, selection.end);
     const end = Math.max(selection.start, selection.end);
     if (end - start < 0.05) return;
 
-    let rafId = 0;
-    const tick = () => {
+    return onAnimationFrame(() => {
       const audio = audioRef.current;
       if (audio && audio.currentTime >= end - 0.01) seekTo(start);
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
+    }, FRAME_ORDER.clock - 1);
   }, [audioRef, isPlaying, loopEnabled, seekTo, selection]);
 
   // Take / reference actions
@@ -187,6 +198,7 @@ export default function StudioPage() {
   return (
     <div className="app">
       <NavBar />
+      <EngineStats engine={engine} filter={filter} layout="row" />
       {micError && <div className="error">{micError}</div>}
 
       <div className="card waveform-card">
@@ -198,6 +210,8 @@ export default function StudioPage() {
             pixelsPerSecond: PIXELS_PER_SECOND,
             clock,
             take,
+            preview: studio.recordTake ? null : preview,
+            previewSeconds: controls.historyDuration,
             reference: studio.showReference ? reference.track : null,
             referenceFilter,
             showLiveMarker: armed && detectionActive,
@@ -219,7 +233,8 @@ export default function StudioPage() {
           isPlaying={isPlaying}
           currentTime={currentTime}
           onSeek={seekTo}
-          onHoverTimeChange={setHoverTime}
+          clock={clock}
+          hoverTimeRef={hoverTimeRef}
           viewMode={viewMode}
           panMode={panMode}
           viewportRef={viewportRef}
@@ -230,9 +245,9 @@ export default function StudioPage() {
         <PlaybackControls
           isPlaying={isPlaying}
           hasAudio={hasAudio}
-          currentTime={currentTime}
+          getTime={getSongTime}
           duration={duration}
-          hoverTime={hoverTime}
+          getHoverTime={getHoverTime}
           viewMode={viewMode}
           panMode={panMode}
           loopEnabled={loopEnabled}
@@ -240,7 +255,7 @@ export default function StudioPage() {
           onPlayPause={handlePlayPause}
           onStop={() => {
             stop();
-            take.breakContinuity();
+            resetPreview();
           }}
           onViewModeChange={setViewMode}
           onPanModeChange={setPanMode}
@@ -250,6 +265,14 @@ export default function StudioPage() {
 
         <audio ref={audioRef} src={audioUrl ?? undefined} preload="auto" hidden />
       </div>
+
+      <AudioUpload
+        fileName={fileName}
+        isDecoding={isDecoding}
+        error={error}
+        collapsed={hasAudio && !isDecoding && !error}
+        onFileChange={handleUpload}
+      />
 
       <StudioControls
         hasAudio={hasAudio}
@@ -270,20 +293,13 @@ export default function StudioPage() {
         onExportReference={exportReference}
       />
 
-      <AudioUpload
-        fileName={fileName}
-        isDecoding={isDecoding}
-        error={error}
-        onFileChange={handleUpload}
-      />
+
 
       <PitchControls
         {...controls}
         enabled={armed}
         setEnabled={setArmed}
-        showHistory={false}
       />
-      <PitchStats sample={sample} />
     </div>
   );
 }

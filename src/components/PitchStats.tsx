@@ -4,6 +4,8 @@ import { formatNoteLabel, type PitchSample } from '../utils/pitch';
 type Props = {
   sample: PitchSample;
   isFullscreen?: boolean;
+  /** 'row' lays the readouts out horizontally in a normal card. */
+  layout?: 'stack' | 'row';
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 };
@@ -11,6 +13,7 @@ type Props = {
 export function PitchStats({
   sample,
   isFullscreen = false,
+  layout = 'stack',
   collapsed = false,
   onToggleCollapsed,
 }: Props) {
@@ -58,6 +61,27 @@ export function PitchStats({
             </button>
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (layout === 'row') {
+    return (
+      <div className="card stats stats--row">
+        <div className="stats-row">
+          <div className="stat">
+            <span className="stat-label">Note</span>
+            <span className="stat-value">{noteLabel}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Frequency</span>
+            <span className="stat-value">{frequencyLabel}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Clarity</span>
+            <span className="stat-value">{clarityLabel}</span>
+          </div>
+        </div>
       </div>
     );
   }
