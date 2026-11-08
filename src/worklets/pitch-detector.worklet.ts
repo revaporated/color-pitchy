@@ -1,4 +1,5 @@
 import { PitchDetector } from 'pitchy';
+import { FRAME_STRIDE, FRAMES_PER_MESSAGE } from '../audio/constants';
 
 type ConfigMessage = {
   type: 'config';
@@ -35,6 +36,9 @@ class PitchDetectorProcessor extends AudioWorkletProcessor {
   private detectionInterval = 1 / 100;
   private nextEmitTime = 0;
   private active = true;
+  // Frames waiting to be posted, FRAME_STRIDE numbers each. Float64 keeps audioTime exact.
+  private readonly batch = new Float64Array(FRAMES_PER_MESSAGE * FRAME_STRIDE);
+  private batchCount = 0;
 
   constructor(options: AudioWorkletNodeOptions) {
     super();
@@ -47,6 +51,8 @@ class PitchDetectorProcessor extends AudioWorkletProcessor {
 
   private allocate(size: number) {
     if (size === this.fftSize) return;
+    // Every frame in a batch shares one window size, so send what's pending first.
+    this.flush();
     this.fftSize = size;
     this.detector = PitchDetector.forFloat32Array(size);
     this.buffer = new Float32Array(size);
@@ -59,7 +65,17 @@ class PitchDetectorProcessor extends AudioWorkletProcessor {
     if (!message || message.type !== 'config') return;
     if (message.fftSize) this.allocate(message.fftSize);
     if (message.detectionRateHz) this.detectionInterval = 1 / message.detectionRateHz;
-    if (typeof message.active === 'boolean') this.active = message.active;
+    if (typeof message.active === 'boolean') {
+      if (!message.active) this.flush();
+      this.active = message.active;
+    }
+  }
+
+  private flush() {
+    if (this.batchCount === 0) return;
+    const frames = this.batch.slice(0, this.batchCount * FRAME_STRIDE);
+    this.batchCount = 0;
+    this.port.postMessage({ frames, windowSize: this.fftSize }, [frames.buffer]);
   }
 
   process(inputs: Float32Array[][]) {
@@ -101,7 +117,13 @@ class PitchDetectorProcessor extends AudioWorkletProcessor {
     }
 
     // Silent windows still post a frame so takes get overwritten and graph lines break.
-    this.port.postMessage({ frequency, clarity, rms, audioTime: windowEnd, windowSize: size });
+    const offset = this.batchCount * FRAME_STRIDE;
+    this.batch[offset] = frequency;
+    this.batch[offset + 1] = clarity;
+    this.batch[offset + 2] = rms;
+    this.batch[offset + 3] = windowEnd;
+    this.batchCount += 1;
+    if (this.batchCount >= FRAMES_PER_MESSAGE) this.flush();
 
     return true;
   }

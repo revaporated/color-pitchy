@@ -15,7 +15,7 @@ import { useAudioFile } from '../hooks/useAudioFile';
 import { useAudioPlayback } from '../hooks/useAudioPlayback';
 import { usePitchEngine } from '../hooks/usePitchEngine';
 import { usePitchSettings, useStudioSettings } from '../hooks/usePitchSettings';
-import { useReferenceTrack } from '../hooks/useReferenceTrack';
+import { useTrackAnalysis } from '../hooks/useReferenceTrack';
 import { buildMidiFile, downloadBytes } from '../utils/midi';
 import { collectPitches, segmentNotes } from '../utils/notes';
 import type { DetectionFilter } from '../utils/pitch';
@@ -66,7 +66,7 @@ export default function StudioPage() {
   // aren't recording; it's cleared on every seek so it only shows this pass.
   const take = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
   const preview = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
-  const reference = useReferenceTrack(audioBuffer);
+  const { peaks, reference } = useTrackAnalysis(audioBuffer);
   const referenceFilter: DetectionFilter = useMemo(
     () => ({
       clarityThreshold: studio.referenceClarity,
@@ -88,7 +88,9 @@ export default function StudioPage() {
   useEffect(
     () =>
       engine.subscribe((frame) => {
-        clock.sync();
+        // The frame loop syncs the clock every animation frame. Only sync here
+        // when it has fallen behind, e.g. the tab is hidden and rAF is paused.
+        if (performance.now() - clock.lastSyncPerfMs > 100) clock.sync();
         if (!clock.isPlaying) return;
         const perfMs = frame.time * 1000;
         if (perfMs < clock.discontinuityPerfMs) return; // sung before the last seek
@@ -227,7 +229,7 @@ export default function StudioPage() {
         />
 
         <WaveformViewer
-          audioBuffer={audioBuffer}
+          peaks={peaks}
           audioRef={audioRef}
           duration={duration}
           isPlaying={isPlaying}

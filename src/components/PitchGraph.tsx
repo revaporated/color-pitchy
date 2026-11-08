@@ -60,6 +60,12 @@ const MAX_GAP_SECONDS = 0.06; // break lines across gaps longer than this
 const MARKER_MAX_AGE = 0.25; // seconds; older frames don't get a "current" marker
 const TRAIL_ALPHA = 0.28;
 const REFERENCE_ALPHA = 0.16;
+/**
+ * Live mode repaints only this much of the right edge each frame. Frames are
+ * stamped at the middle of their analysis window and reach the main thread a
+ * little late, so they land slightly left of "now"; this has to cover that delay.
+ */
+const LIVE_TAIL_SECONDS = 0.3;
 // Built once so the draw loop doesn't allocate a color string per rectangle.
 const NOTE_FILL = Array.from({ length: 12 }, (_, i) =>
   `rgb(${PITCH_COLOR_SHAPE_MAP[i as keyof typeof PITCH_COLOR_SHAPE_MAP].rgb})`,
@@ -67,12 +73,14 @@ const NOTE_FILL = Array.from({ length: 12 }, (_, i) =>
 
 /** What the last repaint showed. A frame whose state matches this can be skipped. */
 type DrawState = {
-  canvasKey: string;
+  pixelWidth: number;
+  pixelHeight: number;
+  dpr: number;
   t0: number;
   t1: number;
   markerX: number;
   markerDrawn: boolean;
-  main: FrameSource;
+  main: FrameSource | null;
   mainVersion: number;
   preview: FrameSource | null;
   previewVersion: number;
@@ -80,9 +88,29 @@ type DrawState = {
   referenceVersion: number;
 };
 
+function emptyDrawState(): DrawState {
+  return {
+    pixelWidth: 0,
+    pixelHeight: 0,
+    dpr: 0,
+    t0: 0,
+    t1: 0,
+    markerX: 0,
+    markerDrawn: false,
+    main: null,
+    mainVersion: -1,
+    preview: null,
+    previewVersion: -1,
+    reference: null,
+    referenceVersion: -1,
+  };
+}
+
 function sameDrawState(a: DrawState, b: DrawState) {
   return (
-    a.canvasKey === b.canvasKey &&
+    a.pixelWidth === b.pixelWidth &&
+    a.pixelHeight === b.pixelHeight &&
+    a.dpr === b.dpr &&
     a.t0 === b.t0 &&
     a.t1 === b.t1 &&
     a.markerX === b.markerX &&
@@ -111,9 +139,13 @@ export function PitchGraph(props: Props) {
     dirtyRef.current = true;
   });
 
-  useEffect(() => props.engine.subscribe(() => {
-    dirtyRef.current = true;
-  }), [props.engine]);
+  useEffect(
+    () =>
+      props.engine.subscribe(() => {
+        dirtyRef.current = true;
+      }),
+    [props.engine],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -138,42 +170,54 @@ export function PitchGraph(props: Props) {
   }, [height]);
 
   useEffect(() => {
-    let canvasKey = '';
-    let staticKey = '';
-    let seen: DrawState | null = null;
+    let canvasWidth = 0;
+    let canvasHeight = 0;
+    let canvasDpr = 0;
     const staticCanvas = document.createElement('canvas');
+    const staticKey = { width: 0, height: 0, dpr: 0, lo: Number.NaN, hi: Number.NaN, noteLines: false };
+    // Two draw states, reused every frame so the skip check doesn't allocate.
+    const seen = emptyDrawState();
+    const next = emptyDrawState();
+    let hasSeen = false;
+    const scratchRuns = new NoteRuns();
+    const referenceCache = new ReferenceRunsCache();
+    const liveLayer = new LiveLayer();
     const fps = { last: performance.now(), frames: 0, value: 0 };
 
-    // `frameNow` is the rAF timestamp shared by every callback in this frame,
+    // `nowMs` is the rAF timestamp shared by every callback in this frame,
     // so the graph and the waveform compute song time from the same instant.
-    const draw = (frameNow: number) => {
+    const draw = (nowMs: number) => {
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
       if (!canvas || !ctx) return;
 
       const p = propsRef.current;
-      const nowMs = frameNow;
-
       const { width, height: h } = sizeRef.current;
       const dpr = window.devicePixelRatio || 1;
       const pixelWidth = Math.max(1, Math.round(width * dpr));
       const pixelHeight = Math.max(1, Math.round(h * dpr));
-      const nextCanvasKey = `${pixelWidth}x${pixelHeight}@${dpr}`;
-      if (nextCanvasKey !== canvasKey) {
+      if (pixelWidth !== canvasWidth || pixelHeight !== canvasHeight || dpr !== canvasDpr) {
         canvas.width = pixelWidth;
         canvas.height = pixelHeight;
         canvas.style.width = `${width}px`;
         canvas.style.height = `${h}px`;
-        canvasKey = nextCanvasKey;
+        canvasWidth = pixelWidth;
+        canvasHeight = pixelHeight;
+        canvasDpr = dpr;
       }
 
       const lo = p.filter.minMidi;
       const hi = Math.max(p.filter.maxMidi, lo + 1);
-      const yOf = (midi: number) => mapMidiToY(midi, h, lo, hi);
 
       // Grid lines change rarely; cache them on an offscreen canvas.
-      const nextStaticKey = `${nextCanvasKey}|${p.showNoteLines}|${lo}-${hi}`;
-      if (nextStaticKey !== staticKey) {
+      if (
+        staticKey.width !== pixelWidth ||
+        staticKey.height !== pixelHeight ||
+        staticKey.dpr !== dpr ||
+        staticKey.lo !== lo ||
+        staticKey.hi !== hi ||
+        staticKey.noteLines !== p.showNoteLines
+      ) {
         staticCanvas.width = pixelWidth;
         staticCanvas.height = pixelHeight;
         const staticCtx = staticCanvas.getContext('2d');
@@ -181,124 +225,150 @@ export function PitchGraph(props: Props) {
           staticCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
           drawStaticLayer(staticCtx, width, h, lo, hi, p.showNoteLines);
         }
-        staticKey = nextStaticKey;
+        staticKey.width = pixelWidth;
+        staticKey.height = pixelHeight;
+        staticKey.dpr = dpr;
+        staticKey.lo = lo;
+        staticKey.hi = hi;
+        staticKey.noteLines = p.showNoteLines;
       }
 
+      // Both modes map time to x linearly: x = xScale * time + xOffset.
       const mode = p.mode;
       let t0: number;
       let t1: number;
-      let xOf: (time: number) => number;
+      let xScale: number;
+      let xOffset: number;
       let markerX: number;
       let showMarker: boolean;
       let mainSource: FrameSource;
-      let preview: { source: FrameSource; t0: number; t1: number } | null = null;
+      let previewSource: FrameSource | null = null;
+      let previewT0 = 0;
+      let previewT1 = 0;
+      let reference: FrameSource | null = null;
 
       if (mode.kind === 'live') {
         t1 = mode.frozenAt ?? nowMs / 1000;
         t0 = t1 - mode.historyDuration;
-        const pxPerSecond = width / mode.historyDuration;
-        xOf = (time) => width - (t1 - time) * pxPerSecond;
+        xScale = width / mode.historyDuration;
+        xOffset = width - t1 * xScale;
         markerX = width - 2;
         showMarker = mode.frozenAt === null;
         mainSource = mode.source;
-
-        if (mode.recordingStartAt !== null) {
-          drawVerticalLine(ctx, xOf(mode.recordingStartAt), h, '#ef4444', 2, 0.7);
-        }
       } else {
-        const viewport = mode.viewportRef.current;
-        const scrollLeft = viewport?.scrollLeft ?? 0;
-        const pps = mode.pixelsPerSecond;
-        t0 = scrollLeft / pps;
-        t1 = (scrollLeft + width) / pps;
-        xOf = (time) => time * pps - scrollLeft;
+        const scrollLeft = mode.viewportRef.current?.scrollLeft ?? 0;
+        xScale = mode.pixelsPerSecond;
+        xOffset = -scrollLeft;
+        t0 = scrollLeft / xScale;
+        t1 = (scrollLeft + width) / xScale;
         const songNow = mode.clock.songTimeAt(nowMs);
-        markerX = Math.max(0, Math.min(xOf(songNow), width - PLAYHEAD_WIDTH));
+        markerX = Math.max(0, Math.min(songNow * xScale + xOffset, width - PLAYHEAD_WIDTH));
         showMarker = mode.showLiveMarker;
         mainSource = mode.take;
-
+        reference = mode.reference;
         if (mode.preview) {
-          preview = {
-            source: mode.preview,
-            t0: Math.max(t0, songNow - mode.previewSeconds),
-            t1: Math.min(t1, songNow),
-          };
+          previewSource = mode.preview;
+          previewT0 = Math.max(t0, songNow - mode.previewSeconds);
+          previewT1 = Math.min(t1, songNow);
         }
       }
 
       const latest = p.engine.latest;
-      const markerDrawn =
-        showMarker &&
-        latest !== null &&
-        nowMs / 1000 - latest.time < MARKER_MAX_AGE &&
-        frameToMidi(latest.frequency, latest.clarity, p.filter) !== null;
+      const latestMidi =
+        showMarker && latest !== null && nowMs / 1000 - latest.time < MARKER_MAX_AGE
+          ? frameToMidi(latest.frequency, latest.clarity, p.filter)
+          : null;
 
       // Skip the repaint when nothing visible has changed. A following live
       // view and a playing timeline always move, so they always draw.
       const animating = mode.kind === 'live' ? mode.frozenAt === null : mode.clock.isPlaying;
-      const reference = mode.kind === 'timeline' ? mode.reference : null;
-      const previewSource = preview?.source ?? null;
-      const next: DrawState = {
-        canvasKey: nextCanvasKey,
-        t0,
-        t1,
-        markerX,
-        markerDrawn,
-        main: mainSource,
-        mainVersion: mainSource.version,
-        preview: previewSource,
-        previewVersion: previewSource?.version ?? -1,
-        reference,
-        referenceVersion: reference?.version ?? -1,
-      };
-      if (!animating && !p.showDiagnostics && !dirtyRef.current && seen !== null && sameDrawState(seen, next)) {
+      next.pixelWidth = pixelWidth;
+      next.pixelHeight = pixelHeight;
+      next.dpr = dpr;
+      next.t0 = t0;
+      next.t1 = t1;
+      next.markerX = markerX;
+      next.markerDrawn = latestMidi !== null;
+      next.main = mainSource;
+      next.mainVersion = mainSource.version;
+      next.preview = previewSource;
+      next.previewVersion = previewSource?.version ?? -1;
+      next.reference = reference;
+      next.referenceVersion = reference?.version ?? -1;
+      if (!animating && !p.showDiagnostics && !dirtyRef.current && hasSeen && sameDrawState(seen, next)) {
         return;
       }
       dirtyRef.current = false;
-      seen = next;
+      Object.assign(seen, next);
+      hasSeen = true;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = BACKGROUND;
       ctx.fillRect(0, 0, width, h);
       ctx.drawImage(staticCanvas, 0, 0, width, h);
 
-      if (mode.kind === 'timeline' && mode.reference) {
-        drawTrails(ctx, mode.reference, t0, t1, xOf, lo, hi, h, width, mode.referenceFilter, REFERENCE_ALPHA);
-      }
+      if (mode.kind === 'live') {
+        const layer = liveLayer.render(
+          mainSource,
+          t1,
+          mode.frozenAt !== null,
+          mode.historyDuration,
+          width,
+          h,
+          pixelWidth,
+          pixelHeight,
+          dpr,
+          lo,
+          hi,
+          p.filter,
+          p.showNoteTrails,
+          scratchRuns,
+        );
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(layer, 0, 0);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      if (p.showNoteTrails) {
-        drawTrails(ctx, mainSource, t0, t1, xOf, lo, hi, h, width, p.filter, TRAIL_ALPHA);
-        if (preview && preview.t1 > preview.t0) {
-          drawTrails(ctx, preview.source, preview.t0, preview.t1, xOf, lo, hi, h, width, p.filter, TRAIL_ALPHA);
+        if (mode.recordingStartAt !== null) {
+          // Use the layer's edge time so the line stays glued to the scrolled history.
+          const x = width - (liveLayer.t1 - mode.recordingStartAt) * xScale;
+          drawVerticalLine(ctx, x, h, '#ef4444', 2, 0.7);
         }
-      }
-      drawPitchLine(ctx, mainSource, t0, t1, xOf, yOf, p.filter);
-      if (preview && preview.t1 > preview.t0) {
-        drawPitchLine(ctx, preview.source, preview.t0, preview.t1, xOf, yOf, p.filter, 0);
-      }
-
-      if (mode.kind === 'timeline') {
+      } else {
+        if (reference) {
+          const runs = referenceCache.get(reference, mode.referenceFilter);
+          drawRuns(ctx, runs, t0, t1, xScale, xOffset, lo, hi, h, width, REFERENCE_ALPHA);
+        }
+        const hasPreview = previewSource !== null && previewT1 > previewT0;
+        if (p.showNoteTrails) {
+          collectRuns(mainSource, t0 - MAX_GAP_SECONDS, t1, p.filter, scratchRuns);
+          drawRuns(ctx, scratchRuns, t0, t1, xScale, xOffset, lo, hi, h, width, TRAIL_ALPHA);
+          if (previewSource && hasPreview) {
+            collectRuns(previewSource, previewT0 - MAX_GAP_SECONDS, previewT1, p.filter, scratchRuns);
+            drawRuns(ctx, scratchRuns, previewT0, previewT1, xScale, xOffset, lo, hi, h, width, TRAIL_ALPHA);
+          }
+        }
+        drawPitchLine(ctx, mainSource, t0, t1, xScale, xOffset, lo, hi, h, p.filter, MAX_GAP_SECONDS);
+        if (previewSource && hasPreview) {
+          drawPitchLine(ctx, previewSource, previewT0, previewT1, xScale, xOffset, lo, hi, h, p.filter, 0);
+        }
         drawVerticalLine(ctx, markerX, h, '#94a3b8', 1, 0.7);
       }
 
-      if (showMarker && latest && nowMs / 1000 - latest.time < MARKER_MAX_AGE) {
-        const midi = frameToMidi(latest.frequency, latest.clarity, p.filter);
-        if (midi !== null) {
-          const style = PITCH_COLOR_SHAPE_MAP[midiToNoteIndex(midi)];
-          const y = yOf(midi);
-          drawMarker(
-            ctx,
-            markerX,
-            y,
-            mode.kind === 'live' ? 5 : 7,
-            p.colorizeMarker ? style.shape : 'circle',
-            p.colorizeMarker ? `rgb(${style.rgb})` : '#0f172a',
-          );
-          ctx.fillStyle = '#0f172a';
-          ctx.font = 'bold 13px sans-serif';
-          ctx.textAlign = 'right';
-          ctx.fillText(formatNoteLabel(midi), Math.max(110, markerX - 10), y - 10);
-        }
+      if (latestMidi !== null) {
+        const style = PITCH_COLOR_SHAPE_MAP[midiToNoteIndex(latestMidi)];
+        const y = mapMidiToY(latestMidi, h, lo, hi);
+        drawMarker(
+          ctx,
+          markerX,
+          y,
+          mode.kind === 'live' ? 5 : 7,
+          p.colorizeMarker ? style.shape : 'circle',
+          p.colorizeMarker ? NOTE_FILL[midiToNoteIndex(latestMidi)] : '#0f172a',
+        );
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(formatNoteLabel(latestMidi), Math.max(110, markerX - 10), y - 10);
       }
 
       if (p.showDiagnostics) {
@@ -384,8 +454,217 @@ function drawStaticLayer(
   }
 }
 
-type XOf = (time: number) => number;
-type YOf = (midi: number) => number;
+/**
+ * Note trails as runs: one entry per stretch of frames on the same semitone,
+ * so a held note is one rectangle instead of one per frame (which also stops
+ * overlapping translucent rectangles from stacking into darker bands).
+ * Typed arrays, grown as needed and reused, so building runs doesn't allocate per frame.
+ */
+class NoteRuns {
+  starts = new Float64Array(256);
+  ends = new Float64Array(256);
+  notes = new Int16Array(256);
+  /** 1 when the run ended at a gap, so its last frame gets a minimum 2 px width. */
+  padded = new Uint8Array(256);
+  count = 0;
+
+  clear() {
+    this.count = 0;
+  }
+
+  push(start: number, end: number, note: number, padded: number) {
+    if (this.count === this.starts.length) this.grow();
+    const i = this.count;
+    this.starts[i] = start;
+    this.ends[i] = end;
+    this.notes[i] = note;
+    this.padded[i] = padded;
+    this.count = i + 1;
+  }
+
+  /** Index of the first run ending at or after `time` (runs are in time order). */
+  firstEndingAfter(time: number) {
+    let low = 0;
+    let high = this.count;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (this.ends[mid] < time) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  }
+
+  private grow() {
+    const size = this.starts.length * 2;
+    const starts = new Float64Array(size);
+    starts.set(this.starts);
+    const ends = new Float64Array(size);
+    ends.set(this.ends);
+    const notes = new Int16Array(size);
+    notes.set(this.notes);
+    const padded = new Uint8Array(size);
+    padded.set(this.padded);
+    this.starts = starts;
+    this.ends = ends;
+    this.notes = notes;
+    this.padded = padded;
+  }
+}
+
+// Visitor state lives at module level so forEachInRange gets the same function
+// every frame instead of a fresh closure. Drawing is never re-entrant.
+const runState = {
+  out: null as NoteRuns | null,
+  filter: null as DetectionFilter | null,
+  active: false,
+  note: 0,
+  start: 0,
+  last: 0,
+};
+
+function visitRun(time: number, frequency: number, clarity: number) {
+  const s = runState;
+  const out = s.out;
+  const filter = s.filter;
+  if (!out || !filter) return;
+  const midi = frameToMidi(frequency, clarity, filter);
+  if (s.active) {
+    if (time - s.last <= MAX_GAP_SECONDS) {
+      if (midi !== null && Math.round(midi) === s.note) {
+        s.last = time;
+        return;
+      }
+      // Pitch changed or went unvoiced: the run reaches this frame.
+      out.push(s.start, time, s.note, 0);
+    } else {
+      out.push(s.start, s.last, s.note, 1);
+    }
+  }
+  if (midi === null) {
+    s.active = false;
+    return;
+  }
+  s.active = true;
+  s.note = Math.round(midi);
+  s.start = time;
+  s.last = time;
+}
+
+function collectRuns(source: FrameSource, t0: number, t1: number, filter: DetectionFilter, out: NoteRuns) {
+  out.clear();
+  runState.out = out;
+  runState.filter = filter;
+  runState.active = false;
+  source.forEachInRange(t0, t1, visitRun);
+  if (runState.active) out.push(runState.start, runState.last, runState.note, 1);
+  runState.out = null;
+  runState.filter = null;
+}
+
+/** Translucent note-height bars in each note's color, for the runs visible in [t0, t1]. */
+function drawRuns(
+  ctx: CanvasRenderingContext2D,
+  runs: NoteRuns,
+  t0: number,
+  t1: number,
+  xScale: number,
+  xOffset: number,
+  lo: number,
+  hi: number,
+  h: number,
+  width: number,
+  alpha: number,
+) {
+  if (runs.count === 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  let currentFill = -1;
+  for (let i = runs.firstEndingAfter(t0 - 2 / xScale); i < runs.count; i += 1) {
+    const start = runs.starts[i];
+    if (start > t1) break;
+    const startX = xScale * start + xOffset;
+    const endX = xScale * runs.ends[i] + xOffset + (runs.padded[i] ? 2 : 0);
+    const left = Math.max(0, startX);
+    const right = Math.min(width, endX);
+    if (right <= 0 || left >= width) continue;
+    const note = runs.notes[i];
+    const top = mapMidiToY(note + 0.5, h, lo, hi);
+    const bottom = mapMidiToY(note - 0.5, h, lo, hi);
+    const fill = ((note % 12) + 12) % 12;
+    if (fill !== currentFill) {
+      ctx.fillStyle = NOTE_FILL[fill];
+      currentFill = fill;
+    }
+    ctx.fillRect(left, Math.min(top, bottom), Math.max(2, right - left), Math.abs(bottom - top));
+  }
+  ctx.restore();
+}
+
+/**
+ * The reference contour never changes while the track is loaded, so its runs
+ * are built once (and again only when the reference filter or range changes)
+ * instead of re-filtering every visible bin on every frame.
+ */
+class ReferenceRunsCache {
+  private readonly runs = new NoteRuns();
+  private source: FrameSource | null = null;
+  private version = -1;
+  private clarity = Number.NaN;
+  private cents = Number.NaN;
+  private minMidi = Number.NaN;
+  private maxMidi = Number.NaN;
+
+  get(source: FrameSource, filter: DetectionFilter) {
+    if (
+      source !== this.source ||
+      source.version !== this.version ||
+      filter.clarityThreshold !== this.clarity ||
+      filter.centsThreshold !== this.cents ||
+      filter.minMidi !== this.minMidi ||
+      filter.maxMidi !== this.maxMidi
+    ) {
+      collectRuns(source, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY, filter, this.runs);
+      this.source = source;
+      this.version = source.version;
+      this.clarity = filter.clarityThreshold;
+      this.cents = filter.centsThreshold;
+      this.minMidi = filter.minMidi;
+      this.maxMidi = filter.maxMidi;
+    }
+    return this.runs;
+  }
+}
+
+const lineState = {
+  ctx: null as CanvasRenderingContext2D | null,
+  filter: null as DetectionFilter | null,
+  xScale: 0,
+  xOffset: 0,
+  lo: 0,
+  hi: 1,
+  h: 0,
+  drawing: false,
+  previousTime: Number.NEGATIVE_INFINITY,
+};
+
+function visitLine(time: number, frequency: number, clarity: number) {
+  const s = lineState;
+  const ctx = s.ctx;
+  const filter = s.filter;
+  if (!ctx || !filter) return;
+  const midi = frameToMidi(frequency, clarity, filter);
+  if (midi === null || time - s.previousTime > MAX_GAP_SECONDS) s.drawing = false;
+  s.previousTime = time;
+  if (midi === null) return;
+  const x = s.xScale * time + s.xOffset;
+  const y = mapMidiToY(midi, s.h, s.lo, s.hi);
+  if (s.drawing) {
+    ctx.lineTo(x, y);
+  } else {
+    ctx.moveTo(x, y);
+    s.drawing = true;
+  }
+}
 
 /** Dark pitch line, broken at unvoiced frames and gaps. */
 function drawPitchLine(
@@ -393,74 +672,177 @@ function drawPitchLine(
   source: FrameSource,
   t0: number,
   t1: number,
-  xOf: XOf,
-  yOf: YOf,
+  xScale: number,
+  xOffset: number,
+  lo: number,
+  hi: number,
+  h: number,
   filter: DetectionFilter,
   /** Extra time read past each edge so lines run off-canvas instead of stopping short. */
-  margin = MAX_GAP_SECONDS,
+  margin: number,
 ) {
   ctx.save();
   ctx.strokeStyle = TAKE_LINE;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.beginPath();
-  let drawing = false;
-  let previousTime = -Infinity;
-  source.forEachInRange(t0 - margin, t1 + margin, (time, frequency, clarity) => {
-    const midi = frameToMidi(frequency, clarity, filter);
-    if (midi === null || time - previousTime > MAX_GAP_SECONDS) drawing = false;
-    previousTime = time;
-    if (midi === null) return;
-    const x = xOf(time);
-    const y = yOf(midi);
-    if (drawing) {
-      ctx.lineTo(x, y);
-    } else {
-      ctx.moveTo(x, y);
-      drawing = true;
-    }
-  });
+  const s = lineState;
+  s.ctx = ctx;
+  s.filter = filter;
+  s.xScale = xScale;
+  s.xOffset = xOffset;
+  s.lo = lo;
+  s.hi = hi;
+  s.h = h;
+  s.drawing = false;
+  s.previousTime = Number.NEGATIVE_INFINITY;
+  source.forEachInRange(t0 - margin, t1 + margin, visitLine);
+  s.ctx = null;
+  s.filter = null;
   ctx.stroke();
   ctx.restore();
 }
 
-/** Translucent note-height bars in each note's color. */
-function drawTrails(
-  ctx: CanvasRenderingContext2D,
-  source: FrameSource,
-  t0: number,
-  t1: number,
-  xOf: XOf,
-  lo: number,
-  hi: number,
-  h: number,
-  width: number,
-  filter: DetectionFilter,
-  alpha: number,
-) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  let previous: { x: number; note: number; time: number } | null = null;
+/**
+ * Live mode's history (trails and pitch line) on an offscreen canvas that is
+ * scrolled rather than redrawn: each frame shifts it left by whole device
+ * pixels and repaints only the right-hand tail where new frames can land.
+ * Anything that changes the picture (size, filter, trails toggle, window
+ * length, freezing, a long stall) falls back to one full repaint.
+ */
+class LiveLayer {
+  private front = document.createElement('canvas');
+  private back = document.createElement('canvas');
+  private source: FrameSource | null = null;
+  private pixelWidth = 0;
+  private pixelHeight = 0;
+  private dpr = 0;
+  private width = 0;
+  private height = 0;
+  private historyDuration = 0;
+  private lo = Number.NaN;
+  private hi = Number.NaN;
+  private clarity = Number.NaN;
+  private cents = Number.NaN;
+  private showTrails = false;
+  /** Performance-clock time at the layer's right edge. */
+  t1 = Number.NaN;
 
-  const flush = (endX: number) => {
-    if (!previous) return;
-    const startX = Math.max(0, Math.min(previous.x, endX));
-    const stopX = Math.min(width, Math.max(previous.x, endX));
-    if (stopX <= 0 || startX >= width) return;
-    const top = mapMidiToY(previous.note + 0.5, h, lo, hi);
-    const bottom = mapMidiToY(previous.note - 0.5, h, lo, hi);
-    ctx.fillStyle = NOTE_FILL[midiToNoteIndex(previous.note)];
-    ctx.fillRect(startX, Math.min(top, bottom), Math.max(2, stopX - startX), Math.abs(bottom - top));
-  };
+  render(
+    source: FrameSource,
+    t1: number,
+    frozen: boolean,
+    historyDuration: number,
+    width: number,
+    height: number,
+    pixelWidth: number,
+    pixelHeight: number,
+    dpr: number,
+    lo: number,
+    hi: number,
+    filter: DetectionFilter,
+    showTrails: boolean,
+    runs: NoteRuns,
+  ): HTMLCanvasElement {
+    const changed =
+      source !== this.source ||
+      pixelWidth !== this.pixelWidth ||
+      pixelHeight !== this.pixelHeight ||
+      dpr !== this.dpr ||
+      width !== this.width ||
+      height !== this.height ||
+      historyDuration !== this.historyDuration ||
+      lo !== this.lo ||
+      hi !== this.hi ||
+      filter.clarityThreshold !== this.clarity ||
+      filter.centsThreshold !== this.cents ||
+      showTrails !== this.showTrails;
 
-  source.forEachInRange(t0 - MAX_GAP_SECONDS, t1, (time, frequency, clarity) => {
-    const midi = frameToMidi(frequency, clarity, filter);
-    const x = xOf(time);
-    if (previous) flush(time - previous.time <= MAX_GAP_SECONDS ? x : previous.x + 2);
-    previous = midi === null ? null : { x, note: Math.round(midi), time };
-  });
-  if (previous) flush((previous as { x: number }).x + 2);
-  ctx.restore();
+    if (changed) {
+      if (pixelWidth !== this.pixelWidth || pixelHeight !== this.pixelHeight) {
+        this.front.width = pixelWidth;
+        this.front.height = pixelHeight;
+        this.back.width = pixelWidth;
+        this.back.height = pixelHeight;
+      }
+      this.source = source;
+      this.pixelWidth = pixelWidth;
+      this.pixelHeight = pixelHeight;
+      this.dpr = dpr;
+      this.width = width;
+      this.height = height;
+      this.historyDuration = historyDuration;
+      this.lo = lo;
+      this.hi = hi;
+      this.clarity = filter.clarityThreshold;
+      this.cents = filter.centsThreshold;
+      this.showTrails = showTrails;
+    }
+
+    const pxPerSecond = width / historyDuration;
+    const devicePxPerSecond = pxPerSecond * dpr;
+
+    if (changed || frozen || !(t1 >= this.t1) || t1 - this.t1 >= historyDuration) {
+      const ctx = this.front.getContext('2d');
+      if (!ctx) return this.front;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, pixelWidth, pixelHeight);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.t1 = t1;
+      this.paint(ctx, source, t1 - historyDuration, t1, pxPerSecond, filter, runs);
+      return this.front;
+    }
+
+    // Whole device pixels only, so the copy stays sharp; the remainder carries over.
+    const shift = Math.floor((t1 - this.t1) * devicePxPerSecond);
+    if (shift > 0) {
+      const backCtx = this.back.getContext('2d');
+      if (backCtx) {
+        backCtx.setTransform(1, 0, 0, 1, 0, 0);
+        backCtx.clearRect(0, 0, pixelWidth, pixelHeight);
+        backCtx.drawImage(this.front, -shift, 0);
+        const swap = this.front;
+        this.front = this.back;
+        this.back = swap;
+        this.t1 += shift / devicePxPerSecond;
+      }
+    }
+
+    const ctx = this.front.getContext('2d');
+    if (!ctx) return this.front;
+    const repaint = Math.min(
+      pixelWidth,
+      Math.max(Math.ceil(LIVE_TAIL_SECONDS * devicePxPerSecond), shift + 2),
+    );
+    const left = pixelWidth - repaint;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(left, 0, repaint, pixelHeight);
+    ctx.beginPath();
+    ctx.rect(left, 0, repaint, pixelHeight);
+    ctx.clip();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.paint(ctx, source, this.t1 - repaint / devicePxPerSecond, this.t1, pxPerSecond, filter, runs);
+    ctx.restore();
+    return this.front;
+  }
+
+  private paint(
+    ctx: CanvasRenderingContext2D,
+    source: FrameSource,
+    from: number,
+    to: number,
+    pxPerSecond: number,
+    filter: DetectionFilter,
+    runs: NoteRuns,
+  ) {
+    const xOffset = this.width - this.t1 * pxPerSecond;
+    if (this.showTrails) {
+      collectRuns(source, from - MAX_GAP_SECONDS, to, filter, runs);
+      drawRuns(ctx, runs, from, to, pxPerSecond, xOffset, this.lo, this.hi, this.height, this.width, TRAIL_ALPHA);
+    }
+    drawPitchLine(ctx, source, from, to, pxPerSecond, xOffset, this.lo, this.hi, this.height, filter, MAX_GAP_SECONDS);
+  }
 }
 
 function drawVerticalLine(

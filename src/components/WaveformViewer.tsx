@@ -6,12 +6,40 @@ import {
   PIXELS_PER_SECOND,
   PLAYHEAD_WIDTH,
   WAVEFORM_HEIGHT,
-  buildPeaks,
 } from '../utils/waveform'
 
 // Browsers cap canvas size (about 32k px per side), so the waveform is drawn
 // as a row of tiles instead of one canvas as wide as the song.
 const TILE_WIDTH = 4096
+
+// Which peaks array each tile canvas was last painted with, so remounting or
+// re-rendering a tile only repaints it when the track changed.
+const paintedTiles = new WeakMap<HTMLCanvasElement, Float32Array>()
+
+function paintTile(canvas: HTMLCanvasElement, peaks: Float32Array, tile: number) {
+  if (paintedTiles.get(canvas) === peaks) return
+  const context = canvas.getContext('2d')
+  if (!context) return
+
+  const dpr = window.devicePixelRatio || 1
+  const height = WAVEFORM_HEIGHT
+  const mid = height / 2
+  const start = tile * TILE_WIDTH
+  const width = Math.max(0, Math.min(TILE_WIDTH, peaks.length - start))
+  canvas.width = Math.max(1, Math.round(width * dpr))
+  canvas.height = Math.round(height * dpr)
+  canvas.style.width = `${width}px`
+  canvas.style.height = `${height}px`
+
+  context.setTransform(dpr, 0, 0, dpr, 0, 0)
+  context.clearRect(0, 0, width, height)
+  context.fillStyle = '#f97316'
+  for (let x = 0; x < width; x += 1) {
+    const barHeight = Math.max(1, peaks[start + x] * mid)
+    context.fillRect(x, mid - barHeight, 1, barHeight * 2)
+  }
+  paintedTiles.set(canvas, peaks)
+}
 
 const formatMarkerLabel = (seconds: number) => {
   const minutes = Math.floor(seconds / 60)
@@ -21,7 +49,8 @@ const formatMarkerLabel = (seconds: number) => {
 }
 
 type Props = {
-  audioBuffer: AudioBuffer | null
+  /** Waveform peaks, one per pixel at PIXELS_PER_SECOND (computed in a worker). */
+  peaks: Float32Array | null
   audioRef: RefObject<HTMLAudioElement>
   duration: number
   isPlaying: boolean
@@ -41,7 +70,7 @@ type Props = {
 }
 
 export const WaveformViewer = ({
-  audioBuffer,
+  peaks,
   audioRef,
   duration,
   isPlaying,
@@ -56,7 +85,6 @@ export const WaveformViewer = ({
   selection,
   onSelectionChange,
 }: Props) => {
-  const tileRefs = useRef<Array<HTMLCanvasElement | null>>([])
   const playheadRef = useRef<HTMLDivElement>(null)
   const hoverLineRef = useRef<HTMLDivElement>(null)
   const hoverOffsetRef = useRef<number | null>(null)
@@ -106,17 +134,46 @@ export const WaveformViewer = ({
   const isUserInteractingRef = useRef(false)
   const [isDragging, setIsDragging] = useState(false)
 
-  const peaks = useMemo(
-    () => (audioBuffer ? buildPeaks(audioBuffer) : null),
-    [audioBuffer],
-  )
   const waveformWidth = peaks?.length ?? 0
   const tileCount = Math.ceil(waveformWidth / TILE_WIDTH)
   const hasWaveform = Boolean(peaks)
+
+  // Only the tiles (and second markers) around the viewport are mounted: the
+  // visible ones plus one tile either side. Updated from scroll events, and only
+  // re-renders when the range actually changes (every few thousand pixels).
+  const [tileRange, setTileRange] = useState({ first: 0, last: 1 })
+  const updateTileRange = useCallback(() => {
+    const viewport = viewportRef.current
+    if (!viewport || tileCount === 0) return
+    const first = Math.max(0, Math.floor(viewport.scrollLeft / TILE_WIDTH) - 1)
+    const last = Math.min(
+      tileCount - 1,
+      Math.floor((viewport.scrollLeft + viewport.clientWidth) / TILE_WIDTH) + 1,
+    )
+    setTileRange((prev) => (prev.first === first && prev.last === last ? prev : { first, last }))
+  }, [tileCount])
+
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    updateTileRange()
+    viewport.addEventListener('scroll', updateTileRange, { passive: true })
+    window.addEventListener('resize', updateTileRange)
+    return () => {
+      viewport.removeEventListener('scroll', updateTileRange)
+      window.removeEventListener('resize', updateTileRange)
+    }
+  }, [updateTileRange])
+
+  const firstTile = Math.min(tileRange.first, Math.max(0, tileCount - 1))
+  const lastTile = Math.min(tileRange.last, tileCount - 1)
+
   const markers = useMemo(() => {
     if (!duration || waveformWidth === 0) return []
 
     const lastSecond = Math.max(0, Math.floor(duration))
+    const fromSecond = Math.max(0, Math.floor((firstTile * TILE_WIDTH) / PIXELS_PER_SECOND))
+    const toSecond = Math.min(lastSecond, Math.ceil(((lastTile + 1) * TILE_WIDTH) / PIXELS_PER_SECOND))
     const items: Array<{
       second: number
       isMajor: boolean
@@ -124,7 +181,7 @@ export const WaveformViewer = ({
       left: number
     }> = []
 
-    for (let second = 0; second <= lastSecond; second += 1) {
+    for (let second = fromSecond; second <= toSecond; second += 1) {
       const isMajor = second % 5 === 0
       items.push({
         second,
@@ -135,7 +192,7 @@ export const WaveformViewer = ({
     }
 
     return items
-  }, [duration, waveformWidth])
+  }, [duration, waveformWidth, firstTile, lastTile])
 
   const normalizedSelection = useMemo(() => {
     if (!selection) return null
@@ -240,39 +297,10 @@ export const WaveformViewer = ({
   )
 
   useEffect(() => {
-    if (!peaks) return
-
-    const dpr = window.devicePixelRatio || 1
-    const height = WAVEFORM_HEIGHT
-    const mid = height / 2
-
-    for (let tile = 0; tile < tileCount; tile += 1) {
-      const canvas = tileRefs.current[tile]
-      const context = canvas?.getContext('2d')
-      if (!canvas || !context) continue
-
-      const start = tile * TILE_WIDTH
-      const width = Math.min(TILE_WIDTH, peaks.length - start)
-      canvas.width = Math.round(width * dpr)
-      canvas.height = Math.round(height * dpr)
-      canvas.style.width = `${width}px`
-      canvas.style.height = `${height}px`
-
-      context.setTransform(dpr, 0, 0, dpr, 0, 0)
-      context.clearRect(0, 0, width, height)
-      context.fillStyle = '#f97316'
-      for (let x = 0; x < width; x += 1) {
-        const barHeight = Math.max(1, peaks[start + x] * mid)
-        context.fillRect(x, mid - barHeight, 1, barHeight * 2)
-      }
-    }
-  }, [peaks, tileCount])
-
-  useEffect(() => {
-    if (audioBuffer) {
+    if (peaks) {
       scrollToTime(0)
     }
-  }, [audioBuffer, scrollToTime])
+  }, [peaks, scrollToTime])
 
   useEffect(() => {
     if (!isPlaying) {
@@ -555,15 +583,19 @@ export const WaveformViewer = ({
             className="waveform-canvas"
             style={{ width: `${waveformWidth}px`, height: `${WAVEFORM_HEIGHT}px` }}
           >
-            {Array.from({ length: tileCount }, (_, tile) => (
-              <canvas
-                key={tile}
-                ref={(element) => {
-                  tileRefs.current[tile] = element
-                }}
-                style={{ left: `${tile * TILE_WIDTH}px` }}
-              />
-            ))}
+            {tileCount > 0 &&
+              Array.from({ length: lastTile - firstTile + 1 }, (_, i) => {
+                const tile = firstTile + i
+                return (
+                  <canvas
+                    key={tile}
+                    ref={(element) => {
+                      if (element && peaks) paintTile(element, peaks, tile)
+                    }}
+                    style={{ left: `${tile * TILE_WIDTH}px` }}
+                  />
+                )
+              })}
           </div>
           {selectionPixels && (
             <div

@@ -1,5 +1,5 @@
 import pitchWorkletUrl from '../worklets/pitch-detector.worklet.ts?worker&url';
-import { DETECTION_RATE_HZ } from './constants';
+import { DETECTION_RATE_HZ, FRAME_STRIDE } from './constants';
 
 /** One raw detection. `time` is in performance-clock seconds (performance.now() / 1000). */
 export type EngineFrame = {
@@ -166,47 +166,53 @@ export class PitchEngine {
     if (!active) this.latest = null;
   }
 
-  private handleMessage(data: {
-    frequency: number;
-    clarity: number;
-    rms: number;
-    audioTime: number;
-    windowSize: number;
-  }) {
+  /** One batch from the worklet: FRAME_STRIDE numbers per frame (frequency, clarity, rms, audioTime). */
+  private handleMessage(data: { frames: Float64Array; windowSize: number }) {
     const context = this.context;
-    if (!context) return;
+    const frames = data?.frames;
+    if (!context || !frames) return;
+    const count = Math.floor(frames.length / FRAME_STRIDE);
+    if (count === 0) return;
 
     const now = performance.now();
-    const endMs = data.audioTime * 1000;
 
     // Messages can arrive late but never early, so the smallest observed
     // (arrival - audio time) is the best estimate of the clock offset.
-    // Let it creep upward slowly in case the clocks drift.
-    const candidate = now - endMs;
+    // Let it creep upward slowly in case the clocks drift. Only the newest
+    // frame in a batch is used: the older ones waited for the batch to fill,
+    // which would bias the estimate late.
+    const newestEndMs = frames[(count - 1) * FRAME_STRIDE + 3] * 1000;
+    const candidate = now - newestEndMs;
     if (this.offsetMs === null || candidate < this.offsetMs) {
       this.offsetMs = candidate;
     } else {
       this.offsetMs += (candidate - this.offsetMs) * 0.002;
     }
-
+    const offsetMs = this.offsetMs;
     const halfWindowMs = (data.windowSize / context.sampleRate) * 500;
-    const frame: EngineFrame = {
-      time: (endMs - halfWindowMs + this.offsetMs) / 1000,
-      frequency: Number.isFinite(data.frequency) && data.frequency > 0 ? data.frequency : 0,
-      clarity: Number.isFinite(data.clarity) ? data.clarity : 0,
-      rms: Number.isFinite(data.rms) ? data.rms : 0,
-    };
-    this.latest = frame;
 
-    this.statCount += 1;
+    for (let i = 0; i < count; i += 1) {
+      const base = i * FRAME_STRIDE;
+      const frequency = frames[base];
+      const clarity = frames[base + 1];
+      const rms = frames[base + 2];
+      const frame: EngineFrame = {
+        time: (frames[base + 3] * 1000 - halfWindowMs + offsetMs) / 1000,
+        frequency: Number.isFinite(frequency) && frequency > 0 ? frequency : 0,
+        clarity: Number.isFinite(clarity) ? clarity : 0,
+        rms: Number.isFinite(rms) ? rms : 0,
+      };
+      this.latest = frame;
+      for (const listener of this.frameListeners) listener(frame);
+    }
+
+    this.statCount += count;
     const elapsed = now - this.statStart;
     if (elapsed >= 500) {
       this.detectionsPerSecond = Math.round((this.statCount * 1000) / elapsed);
       this.statCount = 0;
       this.statStart = now;
     }
-
-    for (const listener of this.frameListeners) listener(frame);
   }
 
   private setStatus(status: EngineStatus) {

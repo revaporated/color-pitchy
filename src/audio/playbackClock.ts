@@ -15,6 +15,8 @@ export class PlaybackClock {
 
   /** performance.now() of the last seek, play or pause. Frames older than this can't be placed reliably. */
   discontinuityPerfMs = 0;
+  /** performance.now() of the last sync or hard sync. */
+  lastSyncPerfMs = 0;
 
   attach(audio: HTMLAudioElement | null) {
     this.detach?.();
@@ -37,6 +39,7 @@ export class PlaybackClock {
     const audio = this.audio;
     const now = performance.now();
     this.anchorPerfMs = now;
+    this.lastSyncPerfMs = now;
     this.anchorSong = audio ? audio.currentTime : 0;
     this.playing = Boolean(audio && !audio.paused && !audio.ended);
     this.rate = audio?.playbackRate || 1;
@@ -47,6 +50,7 @@ export class PlaybackClock {
   sync() {
     const audio = this.audio;
     if (!audio) return;
+    this.lastSyncPerfMs = performance.now();
     const isPlayingNow = !audio.paused && !audio.ended;
     if (isPlayingNow !== this.playing) {
       this.hardSync();
