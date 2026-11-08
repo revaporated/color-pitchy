@@ -10,6 +10,13 @@ type ConfigMessage = {
 type ProcessorOptions = Omit<ConfigMessage, 'type'>;
 
 /**
+ * Windows quieter than this RMS (about -60 dBFS) skip the FFT and report "no
+ * pitch". That is below any playable signal and around the mic's own noise
+ * floor, so it only removes work spent measuring silence.
+ */
+const SILENCE_RMS = 0.001;
+
+/**
  * Keeps a rolling window of the last `fftSize` mic samples and runs pitchy on it
  * `detectionRateHz` times per second.
  *
@@ -24,7 +31,8 @@ class PitchDetectorProcessor extends AudioWorkletProcessor {
   private window = new Float32Array(0);
   private writeIndex = 0;
   private filled = 0;
-  private detectionInterval = 1 / 165;
+  // The engine always passes the real rate in processorOptions; this is only a fallback.
+  private detectionInterval = 1 / 100;
   private nextEmitTime = 0;
   private active = true;
 
@@ -59,10 +67,14 @@ class PitchDetectorProcessor extends AudioWorkletProcessor {
     if (!input || !this.detector) return true;
 
     const size = this.fftSize;
+    const buffer = this.buffer;
+    let write = this.writeIndex;
     for (let i = 0; i < input.length; i += 1) {
-      this.buffer[this.writeIndex] = input[i];
-      this.writeIndex = (this.writeIndex + 1) % size;
+      buffer[write] = input[i];
+      write += 1;
+      if (write === size) write = 0;
     }
+    this.writeIndex = write;
     this.filled = Math.min(size, this.filled + input.length);
 
     if (!this.active || this.filled < size) return true;
@@ -73,22 +85,23 @@ class PitchDetectorProcessor extends AudioWorkletProcessor {
     this.nextEmitTime += this.detectionInterval;
     if (this.nextEmitTime < windowEnd) this.nextEmitTime = windowEnd + this.detectionInterval;
 
-    // Unroll the ring buffer, oldest sample first.
-    const tail = this.buffer.subarray(this.writeIndex);
-    this.window.set(tail, 0);
-    this.window.set(this.buffer.subarray(0, this.writeIndex), tail.length);
-
+    // RMS doesn't care about sample order, so measure the ring as it is.
     let sumSquares = 0;
-    for (let i = 0; i < size; i += 1) sumSquares += this.window[i] * this.window[i];
+    for (let i = 0; i < size; i += 1) sumSquares += buffer[i] * buffer[i];
+    const rms = Math.sqrt(sumSquares / size);
 
-    const [frequency, clarity] = this.detector.findPitch(this.window, sampleRate);
-    this.port.postMessage({
-      frequency,
-      clarity,
-      rms: Math.sqrt(sumSquares / size),
-      audioTime: windowEnd,
-      windowSize: size,
-    });
+    let frequency = 0;
+    let clarity = 0;
+    if (rms >= SILENCE_RMS) {
+      // Unroll the ring buffer, oldest sample first.
+      const tail = buffer.subarray(write);
+      this.window.set(tail, 0);
+      this.window.set(buffer.subarray(0, write), tail.length);
+      [frequency, clarity] = this.detector.findPitch(this.window, sampleRate);
+    }
+
+    // Silent windows still post a frame so takes get overwritten and graph lines break.
+    this.port.postMessage({ frequency, clarity, rms, audioTime: windowEnd, windowSize: size });
 
     return true;
   }

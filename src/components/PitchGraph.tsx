@@ -65,17 +65,55 @@ const NOTE_FILL = Array.from({ length: 12 }, (_, i) =>
   `rgb(${PITCH_COLOR_SHAPE_MAP[i as keyof typeof PITCH_COLOR_SHAPE_MAP].rgb})`,
 );
 
+/** What the last repaint showed. A frame whose state matches this can be skipped. */
+type DrawState = {
+  canvasKey: string;
+  t0: number;
+  t1: number;
+  markerX: number;
+  markerDrawn: boolean;
+  main: FrameSource;
+  mainVersion: number;
+  preview: FrameSource | null;
+  previewVersion: number;
+  reference: FrameSource | null;
+  referenceVersion: number;
+};
+
+function sameDrawState(a: DrawState, b: DrawState) {
+  return (
+    a.canvasKey === b.canvasKey &&
+    a.t0 === b.t0 &&
+    a.t1 === b.t1 &&
+    a.markerX === b.markerX &&
+    a.markerDrawn === b.markerDrawn &&
+    a.main === b.main &&
+    a.mainVersion === b.mainVersion &&
+    a.preview === b.preview &&
+    a.previewVersion === b.previewVersion &&
+    a.reference === b.reference &&
+    a.referenceVersion === b.referenceVersion
+  );
+}
+
 export function PitchGraph(props: Props) {
   const { height, className } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const propsRef = useRef(props);
   const sizeRef = useRef({ width: 800, height: height ?? 320 });
+  // Set when a prop changes or a new frame arrives. Lets a frozen view skip repaints.
+  const dirtyRef = useRef(true);
 
   // The draw loop runs once and reads the latest props from here, so prop
   // changes never restart it and parents don't need to re-render per frame.
   useLayoutEffect(() => {
     propsRef.current = props;
+    dirtyRef.current = true;
   });
+
+  useEffect(() => props.engine.subscribe(() => {
+    dirtyRef.current = true;
+  }), [props.engine]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -102,6 +140,7 @@ export function PitchGraph(props: Props) {
   useEffect(() => {
     let canvasKey = '';
     let staticKey = '';
+    let seen: DrawState | null = null;
     const staticCanvas = document.createElement('canvas');
     const fps = { last: performance.now(), frames: 0, value: 0 };
 
@@ -145,11 +184,6 @@ export function PitchGraph(props: Props) {
         staticKey = nextStaticKey;
       }
 
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = BACKGROUND;
-      ctx.fillRect(0, 0, width, h);
-      ctx.drawImage(staticCanvas, 0, 0, width, h);
-
       const mode = p.mode;
       let t0: number;
       let t1: number;
@@ -183,9 +217,6 @@ export function PitchGraph(props: Props) {
         showMarker = mode.showLiveMarker;
         mainSource = mode.take;
 
-        if (mode.reference) {
-          drawTrails(ctx, mode.reference, t0, t1, xOf, lo, hi, h, width, mode.referenceFilter, REFERENCE_ALPHA);
-        }
         if (mode.preview) {
           preview = {
             source: mode.preview,
@@ -193,6 +224,46 @@ export function PitchGraph(props: Props) {
             t1: Math.min(t1, songNow),
           };
         }
+      }
+
+      const latest = p.engine.latest;
+      const markerDrawn =
+        showMarker &&
+        latest !== null &&
+        nowMs / 1000 - latest.time < MARKER_MAX_AGE &&
+        frameToMidi(latest.frequency, latest.clarity, p.filter) !== null;
+
+      // Skip the repaint when nothing visible has changed. A following live
+      // view and a playing timeline always move, so they always draw.
+      const animating = mode.kind === 'live' ? mode.frozenAt === null : mode.clock.isPlaying;
+      const reference = mode.kind === 'timeline' ? mode.reference : null;
+      const previewSource = preview?.source ?? null;
+      const next: DrawState = {
+        canvasKey: nextCanvasKey,
+        t0,
+        t1,
+        markerX,
+        markerDrawn,
+        main: mainSource,
+        mainVersion: mainSource.version,
+        preview: previewSource,
+        previewVersion: previewSource?.version ?? -1,
+        reference,
+        referenceVersion: reference?.version ?? -1,
+      };
+      if (!animating && !p.showDiagnostics && !dirtyRef.current && seen !== null && sameDrawState(seen, next)) {
+        return;
+      }
+      dirtyRef.current = false;
+      seen = next;
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = BACKGROUND;
+      ctx.fillRect(0, 0, width, h);
+      ctx.drawImage(staticCanvas, 0, 0, width, h);
+
+      if (mode.kind === 'timeline' && mode.reference) {
+        drawTrails(ctx, mode.reference, t0, t1, xOf, lo, hi, h, width, mode.referenceFilter, REFERENCE_ALPHA);
       }
 
       if (p.showNoteTrails) {
@@ -210,7 +281,6 @@ export function PitchGraph(props: Props) {
         drawVerticalLine(ctx, markerX, h, '#94a3b8', 1, 0.7);
       }
 
-      const latest = p.engine.latest;
       if (showMarker && latest && nowMs / 1000 - latest.time < MARKER_MAX_AGE) {
         const midi = frameToMidi(latest.frequency, latest.clarity, p.filter);
         if (midi !== null) {

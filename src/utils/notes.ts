@@ -1,3 +1,4 @@
+import { DETECTION_RATE_HZ } from '../audio/constants';
 import type { FrameSource } from '../audio/frames';
 import { frameToMidi, type DetectionFilter } from './pitch';
 
@@ -100,7 +101,7 @@ function estimateFrameDuration(frames: TimedPitch[]) {
     const dt = frames[i].time - frames[i - 1].time;
     if (dt > 0) deltas.push(dt);
   }
-  if (deltas.length === 0) return 1 / 165;
+  if (deltas.length === 0) return 1 / DETECTION_RATE_HZ;
   deltas.sort((a, b) => a - b);
   return deltas[Math.floor(deltas.length / 2)];
 }

@@ -1,4 +1,5 @@
 import pitchWorkletUrl from '../worklets/pitch-detector.worklet.ts?worker&url';
+import { DETECTION_RATE_HZ } from './constants';
 
 /** One raw detection. `time` is in performance-clock seconds (performance.now() / 1000). */
 export type EngineFrame = {
@@ -50,7 +51,7 @@ export class PitchEngine {
   private statCount = 0;
   private statStart = 0;
 
-  constructor({ fftSize = 2048, detectionRateHz = 165 }: Options = {}) {
+  constructor({ fftSize = 2048, detectionRateHz = DETECTION_RATE_HZ }: Options = {}) {
     this.fftSize = fftSize;
     this.detectionRateHz = detectionRateHz;
   }

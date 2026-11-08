@@ -3,6 +3,8 @@ export type FrameVisitor = (time: number, frequency: number, clarity: number) =>
 
 /** Anything the pitch graph or the MIDI exporter can read frames from. */
 export interface FrameSource {
+  /** Bumped on every write or clear, so renderers can tell whether anything changed. */
+  readonly version: number;
   forEachInRange(t0: number, t1: number, visit: FrameVisitor): void;
 }
 
@@ -17,6 +19,7 @@ export class FrameRing implements FrameSource {
   private head = 0;
   private count = 0;
   readonly capacity: number;
+  version = 0;
 
   constructor(capacity: number) {
     this.capacity = capacity;
@@ -31,11 +34,13 @@ export class FrameRing implements FrameSource {
     this.clarities[this.head] = frame.clarity;
     this.head = (this.head + 1) % this.capacity;
     this.count = Math.min(this.count + 1, this.capacity);
+    this.version += 1;
   }
 
   clear() {
     this.head = 0;
     this.count = 0;
+    this.version += 1;
   }
 
   forEachInRange(t0: number, t1: number, visit: FrameVisitor) {
@@ -62,6 +67,7 @@ export class PitchTrack implements FrameSource {
   readonly gridHz: number;
   readonly frequency: Float32Array;
   readonly clarity: Float32Array;
+  version = 0;
   private lastBin = -1;
   private readonly maxFillBins: number;
 
@@ -100,6 +106,7 @@ export class PitchTrack implements FrameSource {
       this.clarity[b] = clarity;
     }
     this.lastBin = bin;
+    this.version += 1;
   }
 
   /** Call after a seek so the next write doesn't bridge the jump. */
@@ -111,6 +118,7 @@ export class PitchTrack implements FrameSource {
     this.frequency.fill(0);
     this.clarity.fill(Number.NaN);
     this.lastBin = -1;
+    this.version += 1;
   }
 
   hasData() {

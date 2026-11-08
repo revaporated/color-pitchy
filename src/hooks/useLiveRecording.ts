@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { DETECTION_RATE_HZ } from '../audio/constants';
 import { FrameRing } from '../audio/frames';
 import type { EngineFrame, PitchEngine } from '../audio/pitchEngine';
 import { buildMidiFile, downloadBytes, formatTimestampFilename } from '../utils/midi';
@@ -6,7 +7,7 @@ import { collectPitches, segmentNotes } from '../utils/notes';
 import type { DetectionFilter } from '../utils/pitch';
 
 /** Upper bound on a Live recording: 30 minutes at the detection rate. */
-const MAX_RECORDING_FRAMES = 165 * 60 * 30;
+const MAX_RECORDING_FRAMES = DETECTION_RATE_HZ * 60 * 30;
 
 /**
  * Records raw frames in Live mode. Notes are built when you download, using

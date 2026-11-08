@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
+import { DETECTION_RATE_HZ } from '../audio/constants';
 import { PitchEngine, type EngineStatus } from '../audio/pitchEngine';
 import { frameToMidi, type DetectionFilter, type PitchSample } from '../utils/pitch';
 
-export const DETECTION_RATE_HZ = 165;
+export { DETECTION_RATE_HZ };
 
 type Options = {
   /** Mic open. */
