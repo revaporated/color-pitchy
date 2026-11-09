@@ -985,3 +985,14 @@ button:disabled {
 .pitch-graph {
   touch-action: pan-y;
 }
+
+/* Label + control on one line, inside a wrapping row */
+.controls label.inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-field input[type='range'] {
+  width: 140px;
+}

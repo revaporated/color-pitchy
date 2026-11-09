@@ -12,6 +12,8 @@ import {
   type NoteEdits,
 } from '../audio/noteEdits';
 import { NoteSet } from '../audio/noteSet';
+import { SpectrogramImage } from '../audio/spectrogramImage';
+import { useSpectrogram } from '../hooks/useSpectrogram';
 import { ReferencePlayer } from '../audio/referencePlayer';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import { PlaybackClock } from '../audio/playbackClock';
@@ -234,7 +236,18 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   // 0: only show a saved analysis. Analyze bumps it, which lets the analysis run.
   const [runToken, setRunToken] = useState(0);
   const { analysis, setAnalysis } = studio;
-  const { peaks, reference } = useTrackAnalysis(audioBuffer, analysis, audio?.id ?? null, runToken);
+  const { peaks, reference, mono } = useTrackAnalysis(audioBuffer, analysis, audio?.id ?? null, runToken);
+
+  // Spectrogram: computed once per track when first shown; the image is
+  // rebuilt (cheaply) when the view or range changes.
+  const spectrogram = useSpectrogram(mono, studio.showSpectrogram && hasAudio);
+  const spectrogramImage = useMemo(
+    () =>
+      spectrogram.data
+        ? new SpectrogramImage(spectrogram.data, studio.spectrogramView, studio.spectrogramRange)
+        : null,
+    [spectrogram.data, studio.spectrogramView, studio.spectrogramRange],
+  );
   const analyze = async (next: AnalysisSettings) => {
     if (sameAnalysis(next, analysis)) {
       // Same settings: throw the saved result away and run again.
@@ -586,6 +599,8 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
             previewSeconds: controls.historyDuration,
             reference: studio.showReference || pen ? referenceNotes : null,
             pen,
+            spectrogram: studio.showSpectrogram ? spectrogramImage : null,
+            spectrogramOpacity: studio.spectrogramOpacity,
             referenceOpacity: studio.referenceOpacity,
             playheadXRef,
             showLiveMarker: armed && detectionActive,
@@ -681,6 +696,21 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         setTrackVolume={studio.setTrackVolume}
 
         referenceReady={reference.status === 'ready'}
+        showSpectrogram={studio.showSpectrogram}
+        setShowSpectrogram={studio.setShowSpectrogram}
+        spectrogramView={studio.spectrogramView}
+        setSpectrogramView={studio.setSpectrogramView}
+        spectrogramRange={studio.spectrogramRange}
+        setSpectrogramRange={studio.setSpectrogramRange}
+        spectrogramOpacity={studio.spectrogramOpacity}
+        setSpectrogramOpacity={studio.setSpectrogramOpacity}
+        spectrogramStatus={
+          spectrogram.status === 'computing'
+            ? `Computing... ${Math.round(spectrogram.progress * 100)}%`
+            : spectrogram.status === 'error'
+              ? `Failed: ${spectrogram.message}`
+              : null
+        }
         onClearTake={clearTake}
         onExportTake={exportTake}
         onExportReference={exportReference}

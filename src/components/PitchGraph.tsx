@@ -3,6 +3,7 @@ import type { MouseEvent, PointerEvent, RefObject } from 'react';
 import type { FrameSource } from '../audio/frames';
 import { MIN_NOTE_SECONDS, newManualId, type NoteSpan } from '../audio/noteEdits';
 import type { NoteSet, RefNote } from '../audio/noteSet';
+import type { SpectrogramImage } from '../audio/spectrogramImage';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import type { PitchEngine } from '../audio/pitchEngine';
 import type { PlaybackClock } from '../audio/playbackClock';
@@ -43,6 +44,9 @@ export type TimelineGraphMode = {
   playheadXRef?: RefObject<number | null>;
   /** Draw the current mic pitch at the playhead. */
   showLiveMarker: boolean;
+  /** The track's spectrogram, drawn behind everything else. Null when off. */
+  spectrogram?: SpectrogramImage | null;
+  spectrogramOpacity?: number;
   /** Pen mode: edit the reference notes with the mouse. Null when off. */
   pen?: PenOptions | null;
 };
@@ -386,6 +390,9 @@ export function PitchGraph(props: Props) {
           drawVerticalLine(ctx, x, h, '#ef4444', 2, 0.7, dpr);
         }
       } else {
+        if (mode.spectrogram) {
+          mode.spectrogram.draw(ctx, t0, t1, xScale, xOffset, lo, hi, h, mode.spectrogramOpacity ?? 0.6);
+        }
         if (reference) {
           const pen = mode.pen ?? null;
           drawNotes(

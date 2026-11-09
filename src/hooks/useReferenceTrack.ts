@@ -70,10 +70,17 @@ export type ReferenceState =
   | { status: 'ready'; track: PitchTrack; progress: 1 }
   | { status: 'error'; track: null; progress: 0; message: string };
 
+export type MonoTrack = { samples: Float32Array; sampleRate: number };
+
 export type TrackAnalysis = {
   /** Waveform peaks, one per pixel at PIXELS_PER_SECOND. Null until computed. */
   peaks: Float32Array | null;
   reference: ReferenceState;
+  /**
+   * The mono downmix (decimated to ~22 kHz). Stays the same object while the
+   * track does, so re-analyzing doesn't make the spectrogram recompute.
+   */
+  mono: MonoTrack | null;
 };
 
 const IDLE: ReferenceState = { status: 'idle', track: null, progress: 0 };
@@ -109,6 +116,7 @@ export function useTrackAnalysis(
   const { method, smoothing, windowMs, minMidi, maxMidi } = settings;
   const [peaks, setPeaks] = useState<Float32Array | null>(null);
   const [reference, setReference] = useState<ReferenceState>(IDLE);
+  const [mono, setMono] = useState<(MonoTrack & { buffer: AudioBuffer }) | null>(null);
 
   useEffect(() => {
     setPeaks(null);
@@ -233,6 +241,8 @@ export function useTrackAnalysis(
       } else if (message.type === 'mono') {
         prep.terminate();
         const { samples, sampleRate } = message;
+        // Reference workers get copies, so this array stays intact for the spectrogram.
+        setMono((previous) => (previous?.buffer === audioBuffer ? previous : { buffer: audioBuffer, samples, sampleRate }));
         void cached.then((track) => {
           if (cancelled || track) return;
           if (runToken > 0) runReference(samples, sampleRate);
@@ -263,5 +273,5 @@ export function useTrackAnalysis(
     };
   }, [audioBuffer, method, smoothing, windowMs, minMidi, maxMidi, audioId, runToken]);
 
-  return { peaks, reference };
+  return { peaks, reference, mono: mono && mono.buffer === audioBuffer ? mono : null };
 }

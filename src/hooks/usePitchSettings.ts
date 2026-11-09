@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { ProjectSettings } from '../storage/projects';
 import type { AnalysisSettings } from './useReferenceTrack';
+import type { SpectrogramView } from '../audio/spectrogramImage';
 import type { DetectionFilter } from '../utils/pitch';
 
 const PREFIX = 'color-pitchy:';
@@ -100,6 +101,10 @@ export function useStudioSettings(initial: ProjectSettings) {
   const [playReference, setPlayReference] = usePersistentState('studio.playReference', false);
   const [referenceVolume, setReferenceVolume] = usePersistentState('studio.referenceVolume', 0.5);
   const [trackVolume, setTrackVolume] = usePersistentState('studio.trackVolume', 1);
+  const [showSpectrogram, setShowSpectrogram] = usePersistentState('studio.showSpectrogram', false);
+  const [spectrogramView, setSpectrogramView] = usePersistentState<SpectrogramView>('studio.spectrogramView', 'peaks');
+  const [spectrogramRange, setSpectrogramRange] = usePersistentState('studio.spectrogramRange', 50);
+  const [spectrogramOpacity, setSpectrogramOpacity] = usePersistentState('studio.spectrogramOpacity', 0.6);
 
   const [showReference, setShowReference] = useState(initial.showReference);
   const [referenceClarity, setReferenceClarity] = useState(initial.referenceClarity);
@@ -149,5 +154,13 @@ export function useStudioSettings(initial: ProjectSettings) {
     setReferenceVolume,
     trackVolume,
     setTrackVolume,
+    showSpectrogram,
+    setShowSpectrogram,
+    spectrogramView,
+    setSpectrogramView,
+    spectrogramRange,
+    setSpectrogramRange,
+    spectrogramOpacity,
+    setSpectrogramOpacity,
   };
 }

@@ -1,6 +1,8 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { FiCircle, FiDownload, FiTool, FiTrash2 } from 'react-icons/fi';
 import { InfoTip } from './InfoTip';
+import { Stepper } from './Stepper';
+import type { SpectrogramView } from '../audio/spectrogramImage';
 
 type Props = {
   hasAudio: boolean;
@@ -31,6 +33,16 @@ type Props = {
   debugExportStatus: string | null;
   /** Whether there are reference notes to export. */
   referenceReady: boolean;
+  showSpectrogram: boolean;
+  setShowSpectrogram: Dispatch<SetStateAction<boolean>>;
+  spectrogramView: SpectrogramView;
+  setSpectrogramView: Dispatch<SetStateAction<SpectrogramView>>;
+  spectrogramRange: number;
+  setSpectrogramRange: Dispatch<SetStateAction<number>>;
+  spectrogramOpacity: number;
+  setSpectrogramOpacity: Dispatch<SetStateAction<number>>;
+  /** Progress or error text, or null when idle/ready. */
+  spectrogramStatus: string | null;
 };
 
 export function StudioControls({
@@ -61,6 +73,15 @@ export function StudioControls({
   onDebugExport,
   debugExportStatus,
   referenceReady,
+  showSpectrogram,
+  setShowSpectrogram,
+  spectrogramView,
+  setSpectrogramView,
+  spectrogramRange,
+  setSpectrogramRange,
+  spectrogramOpacity,
+  setSpectrogramOpacity,
+  spectrogramStatus,
 }: Props) {
   return (
     <div className="card controls studio-controls">
@@ -133,7 +154,58 @@ export function StudioControls({
             where the analysis is wrong. Turn the track volume down to hear the notes on their own.
           </InfoTip>
         </label>
+
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={showSpectrogram}
+            onChange={(event) => setShowSpectrogram(event.target.checked)}
+          />
+          Show spectrogram
+          {spectrogramStatus && <span className="studio-hint">{spectrogramStatus}</span>}
+        </label>
       </div>
+
+      {showSpectrogram && (
+        <div className="stepper-group">
+          <label className="inline-field">
+            View
+            <select
+              className="analysis-panel__select"
+              value={spectrogramView}
+              onChange={(event) => setSpectrogramView(event.target.value as SpectrogramView)}
+            >
+              <option value="peaks">Notes only</option>
+              <option value="harmonic">Harmonic</option>
+              <option value="raw">Raw</option>
+            </select>
+            <InfoTip>
+              Raw shows the energy at each semitone, so overtones appear as extra rows above a
+              note. Harmonic adds up each note's overtones and fades anything that doesn't stand
+              out, so the played notes light up. Notes only goes further and keeps roughly one
+              bright row per sounding note.
+            </InfoTip>
+          </label>
+          <Stepper
+            label="Range"
+            value={`${spectrogramRange} dB`}
+            onStep={(direction) => setSpectrogramRange((value) => Math.min(90, Math.max(20, value + direction * 5)))}
+            canDecrease={spectrogramRange > 20}
+            canIncrease={spectrogramRange < 90}
+          />
+          <label className="inline-field">
+            Opacity: {Math.round(spectrogramOpacity * 100)}%
+            <input
+              type="range"
+              min={0.1}
+              max={1}
+              step={0.05}
+              value={spectrogramOpacity}
+              onChange={(event) => setSpectrogramOpacity(parseFloat(event.target.value))}
+            />
+          </label>
+        </div>
+      )}
 
       <div className="control-pair">
         <label className="slider-row">
