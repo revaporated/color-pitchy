@@ -4,15 +4,18 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
 import StudioPage from './pages/Studio'
+import LibraryPage from './pages/Library'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<App />} />
-        <Route path="/studio" element={<StudioPage />} />
-        {/* The old Songs page is now Studio with the mic off. */}
-        <Route path="/songs" element={<Navigate to="/studio" replace />} />
+        <Route path="/library" element={<LibraryPage />} />
+        <Route path="/studio/:projectId" element={<StudioPage />} />
+        {/* Studio opens a project from the library. */}
+        <Route path="/studio" element={<Navigate to="/library" replace />} />
+        <Route path="/songs" element={<Navigate to="/library" replace />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

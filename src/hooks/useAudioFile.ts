@@ -1,78 +1,57 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ChangeEvent } from 'react'
+import { useEffect, useState } from 'react';
 
-export const useAudioFile = () => {
-  const [audioUrl, setAudioUrl] = useState<string | null>(null)
-  const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null)
-  const [fileName, setFileName] = useState<string | null>(null)
-  const [isDecoding, setIsDecoding] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [duration, setDuration] = useState(0)
+export type AudioSource = { blob: Blob; fileName: string };
 
-  const audioContextRef = useRef<AudioContext | null>(null)
+type Decoded = {
+  source: AudioSource;
+  url: string;
+  buffer: AudioBuffer | null;
+  error: string | null;
+};
 
-  useEffect(() => {
-    if (!audioUrl) return
-
-    return () => {
-      URL.revokeObjectURL(audioUrl)
-    }
-  }, [audioUrl])
+/**
+ * Decodes an audio blob from the library and gives the <audio> element a URL
+ * for it. Pass a new source object to switch tracks; pass null for no track.
+ */
+export function useAudioSource(source: AudioSource | null) {
+  const [decoded, setDecoded] = useState<Decoded | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    return () => {
-      if (audioContextRef.current) {
-        audioContextRef.current.close()
+    if (!source) return;
+    let cancelled = false;
+    const url = URL.createObjectURL(source.blob);
+
+    void (async () => {
+      const context = new AudioContext();
+      try {
+        const data = await source.blob.arrayBuffer();
+        const buffer = await context.decodeAudioData(data);
+        if (!cancelled) setDecoded({ source, url, buffer, error: null });
+      } catch {
+        if (!cancelled) {
+          setDecoded({ source, url, buffer: null, error: 'Unable to decode this audio file.' });
+        }
+      } finally {
+        void context.close().catch(() => undefined);
       }
-    }
-  }, [])
+    })();
 
-  const handleFileChange = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
+    return () => {
+      cancelled = true;
+      URL.revokeObjectURL(url);
+    };
+  }, [source]);
 
-    const isMp3 =
-      file.type === 'audio/mpeg' || file.name.toLowerCase().endsWith('.mp3')
-
-    setError(null)
-    setIsDecoding(true)
-    setAudioBuffer(null)
-    setDuration(0)
-    setFileName(file.name)
-
-    if (!isMp3) {
-      setError('Please choose an MP3 file.')
-      setIsDecoding(false)
-      return
-    }
-
-    const nextUrl = URL.createObjectURL(file)
-    setAudioUrl(nextUrl)
-
-    try {
-      const arrayBuffer = await file.arrayBuffer()
-      const context = audioContextRef.current ?? new AudioContext()
-      audioContextRef.current = context
-      const decoded = await context.decodeAudioData(arrayBuffer)
-
-      setAudioBuffer(decoded)
-      setDuration(decoded.duration)
-    } catch {
-      setError('Unable to decode this audio file.')
-      setAudioBuffer(null)
-    } finally {
-      setIsDecoding(false)
-    }
-  }, [])
+  const current = source && decoded?.source === source ? decoded : null;
 
   return {
-    audioUrl,
-    audioBuffer,
-    fileName,
-    isDecoding,
-    error,
-    duration,
+    audioUrl: current?.url ?? null,
+    audioBuffer: current?.buffer ?? null,
+    fileName: source?.fileName ?? null,
+    isDecoding: Boolean(source) && !current,
+    error: error ?? current?.error ?? null,
+    duration: current?.buffer?.duration ?? 0,
     setError,
-    handleFileChange,
-  }
+  };
 }

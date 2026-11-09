@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
-import { FiCircle, FiDownload, FiTool, FiTrash2 } from 'react-icons/fi';
+import { FiCircle, FiDownload, FiRefreshCw, FiTool, FiTrash2 } from 'react-icons/fi';
 import { InfoTip } from './InfoTip';
 import type { ReferenceState } from '../hooks/useReferenceTrack';
 
@@ -27,6 +27,7 @@ type Props = {
   onExportTake: () => void;
   onExportReference: () => void;
   onDebugExport: () => void;
+  onReanalyze: () => void;
   debugExportStatus: string | null;
 };
 
@@ -54,6 +55,7 @@ export function StudioControls({
   onExportTake,
   onExportReference,
   onDebugExport,
+  onReanalyze,
   debugExportStatus,
 }: Props) {
   const referenceStatus =
@@ -122,6 +124,19 @@ export function StudioControls({
         />
         Show reference contour
         <span className="studio-hint">{referenceStatus}</span>
+        {(reference.status === 'ready' || reference.status === 'error') && (
+          <button
+            type="button"
+            className="link-button"
+            onClick={(event) => {
+              event.preventDefault();
+              onReanalyze();
+            }}
+            title="Discard the cached contour for this track and analyze it again"
+          >
+            <FiRefreshCw /> Re-analyze
+          </button>
+        )}
       </label>
 
       <label className="checkbox">

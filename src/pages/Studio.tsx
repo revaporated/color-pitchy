@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import { PitchTrack } from '../audio/frames';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import { PlaybackClock } from '../audio/playbackClock';
@@ -11,11 +12,23 @@ import { EngineStats } from '../components/EngineStats';
 import { PlaybackControls } from '../components/PlaybackControls';
 import { StudioControls } from '../components/StudioControls';
 import { WaveformViewer } from '../components/WaveformViewer';
-import { useAudioFile } from '../hooks/useAudioFile';
+import { useAudioSource } from '../hooks/useAudioFile';
 import { useAudioPlayback } from '../hooks/useAudioPlayback';
 import { usePitchEngine } from '../hooks/usePitchEngine';
 import { usePitchSettings, useStudioSettings } from '../hooks/usePitchSettings';
 import { useTrackAnalysis } from '../hooks/useReferenceTrack';
+import {
+  clearReferences,
+  getAudio,
+  getProject,
+  getTake,
+  isSupportedAudio,
+  rememberProjectSettings,
+  saveTake,
+  setProjectAudio,
+  updateProject,
+} from '../storage/projects';
+import type { AudioRecord, ProjectMeta, TakeRecord } from '../storage/projects';
 import { contourCsv, debugExportBase, encodeWav, saveDebugFile } from '../utils/debugExport';
 import { buildMidiFile, downloadBytes } from '../utils/midi';
 import { collectPitches, segmentNotes } from '../utils/notes';
@@ -27,22 +40,120 @@ const GRAPH_HEIGHT = 420;
 
 type Selection = { start: number; end: number };
 
+type LoadedProject = {
+  id: string;
+  project: ProjectMeta | null;
+  audio: AudioRecord | null;
+  take: TakeRecord | null;
+  error?: string;
+};
+
+/** Loads the project named in the URL from the library, then opens it. */
+export default function StudioPage() {
+  const { projectId = '' } = useParams();
+  const [loaded, setLoaded] = useState<LoadedProject | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const project = (await getProject(projectId)) ?? null;
+        const [audio, take] = project
+          ? await Promise.all([
+              project.audioId ? getAudio(project.audioId) : undefined,
+              getTake(project.id),
+            ])
+          : [undefined, undefined];
+        if (!cancelled) setLoaded({ id: projectId, project, audio: audio ?? null, take: take ?? null });
+      } catch (err) {
+        if (!cancelled) {
+          setLoaded({ id: projectId, project: null, audio: null, take: null, error: String(err) });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  if (!loaded || loaded.id !== projectId) {
+    return (
+      <div className="app">
+        <NavBar />
+        <div className="card">Loading project...</div>
+      </div>
+    );
+  }
+
+  if (!loaded.project) {
+    return (
+      <div className="app">
+        <NavBar />
+        <div className="card">
+          {loaded.error ? `Couldn't open the project: ${loaded.error}` : "This project doesn't exist."}{' '}
+          <Link to="/library">Back to the library</Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <StudioSession
+      key={loaded.project.id}
+      project={loaded.project}
+      initialAudio={loaded.audio}
+      initialTake={loaded.take}
+    />
+  );
+}
+
+type SessionProps = {
+  project: ProjectMeta;
+  initialAudio: AudioRecord | null;
+  initialTake: TakeRecord | null;
+};
+
 /**
  * Studio mode: everything in Live, plus a track. The pitch graph shares the
  * waveform's x axis, so the take is drawn at the song position it was sung at,
  * on top of the track's own pitch contour, and stays put when you seek.
  */
-export default function StudioPage() {
+function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
+  const projectId = project.id;
   const { controls, filter } = usePitchSettings();
-  const studio = useStudioSettings();
+  const studio = useStudioSettings(project.settings);
 
-  const { audioUrl, audioBuffer, fileName, isDecoding, error, duration, setError, handleFileChange } =
-    useAudioFile();
+  const [audio, setAudio] = useState<AudioRecord | null>(initialAudio);
+  // The saved take to restore once the track has decoded (null after a track change).
+  const [storedTake, setStoredTake] = useState<TakeRecord | null>(initialTake);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const { audioUrl, audioBuffer, fileName, isDecoding, error, duration, setError } =
+    useAudioSource(audio);
   const handlePlayError = useCallback(() => setError('Unable to start playback.'), [setError]);
   const { audioRef, isPlaying, currentTime, playPause, stop, seek } = useAudioPlayback({
     onPlayError: handlePlayError,
   });
   const hasAudio = Boolean(audioUrl && audioBuffer);
+
+  // Save the project's settings when they change (debounced, skipping the initial values).
+  const savedSettingsRef = useRef(studio.projectSettings);
+  useEffect(() => {
+    const settings = studio.projectSettings;
+    if (settings === savedSettingsRef.current) return;
+    const timer = setTimeout(() => {
+      savedSettingsRef.current = settings;
+      rememberProjectSettings(settings);
+      void updateProject(projectId, { settings });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [projectId, studio.projectSettings]);
+
+  // Fill in the duration in the library listing if it wasn't known yet.
+  useEffect(() => {
+    if (duration > 0 && Math.abs((project.duration ?? 0) - duration) > 0.01) {
+      void updateProject(projectId, { duration, updatedAt: project.updatedAt });
+    }
+  }, [duration, project.duration, project.updatedAt, projectId]);
 
   // Mic
   const [armed, setArmed] = useState(false);
@@ -65,13 +176,54 @@ export default function StudioPage() {
   // `take` keeps what you record. `preview` always follows the mic while the
   // track plays and is drawn as a short trail behind the playhead when you
   // aren't recording; it's cleared on every seek so it only shows this pass.
-  const take = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
+  const take = useMemo(() => {
+    const track = new PitchTrack(duration, TAKE_GRID_HZ);
+    if (duration > 0 && storedTake && storedTake.gridHz === TAKE_GRID_HZ) {
+      const n = Math.min(track.length, storedTake.frequency.length, storedTake.clarity.length);
+      track.frequency.set(storedTake.frequency.subarray(0, n));
+      track.clarity.set(storedTake.clarity.subarray(0, n));
+    }
+    return track;
+  }, [duration, storedTake]);
+
+  // Autosave the take: every couple of seconds while it changes, when the tab
+  // is hidden, and on leaving Studio.
+  useEffect(() => {
+    let savedVersion = take.version;
+    const flush = () => {
+      if (take.version === savedVersion) return;
+      savedVersion = take.version;
+      const record = take.hasData()
+        ? { gridHz: take.gridHz, frequency: take.frequency.slice(), clarity: take.clarity.slice() }
+        : null;
+      void saveTake(projectId, record).catch((err) => console.error('Saving the take failed', err));
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    const timer = setInterval(flush, 2000);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, [take, projectId]);
   const preview = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
+  const [analysisToken, setAnalysisToken] = useState(0);
   const { peaks, reference } = useTrackAnalysis(
     audioBuffer,
     studio.topVoiceReference ? 'topVoice' : 'pitchy',
     studio.referenceSmoothing,
+    audio?.id ?? null,
+    analysisToken,
   );
+  const reanalyze = async () => {
+    if (audio) await clearReferences(audio.id).catch(() => undefined);
+    setAnalysisToken((value) => value + 1);
+  };
   const referenceFilter: DetectionFilter = useMemo(
     () => ({
       clarityThreshold: studio.referenceClarity,
@@ -130,14 +282,34 @@ export default function StudioPage() {
     [duration, resetPreview, seek],
   );
 
+  // Adds a track to the project, or replaces it (which deletes the take).
   const handleUpload = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (!file) return;
+      if (!isSupportedAudio(file)) {
+        setUploadError('Please choose an MP3 file.');
+        return;
+      }
+      if (take.hasData() && !window.confirm("Replacing the track deletes this project's take. Continue?")) {
+        return;
+      }
+      setUploadError(null);
+      setError(null);
       stop();
       setSelection(null);
       setLoopEnabled(false);
-      handleFileChange(event);
+      take.clear();
+      try {
+        const { audio: added } = await setProjectAudio(projectId, file);
+        setStoredTake(null);
+        setAudio(added);
+      } catch (err) {
+        setUploadError(`Couldn't save the track: ${String(err)}`);
+      }
     },
-    [handleFileChange, stop],
+    [projectId, setError, stop, take],
   );
 
   const handleSelectionChange = useCallback((next: Selection | null) => {
@@ -241,7 +413,7 @@ export default function StudioPage() {
 
   return (
     <div className="app">
-      <NavBar />
+      <NavBar title={project.name} />
       <EngineStats engine={engine} filter={filter} layout="row" />
       {micError && <div className="error">{micError}</div>}
 
@@ -317,9 +489,9 @@ export default function StudioPage() {
       <AudioUpload
         fileName={fileName}
         isDecoding={isDecoding}
-        error={error}
-        collapsed={hasAudio && !isDecoding && !error}
-        onFileChange={handleUpload}
+        error={uploadError ?? error}
+        collapsed={hasAudio && !isDecoding && !error && !uploadError}
+        onFileChange={(event) => void handleUpload(event)}
       />
 
       <StudioControls
@@ -346,6 +518,7 @@ export default function StudioPage() {
         onExportTake={exportTake}
         onExportReference={exportReference}
         onDebugExport={() => void debugExport()}
+        onReanalyze={() => void reanalyze()}
         debugExportStatus={debugExportStatus}
       />
 

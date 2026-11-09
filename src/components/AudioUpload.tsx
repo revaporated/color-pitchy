@@ -45,8 +45,8 @@ export const AudioUpload = ({ fileName, isDecoding, error, collapsed = false, on
     <div className="card songs-card">
       <h1>Track</h1>
       <p>
-        Load an MP3 to sing or play along with it. Your pitch is drawn on the same timeline as the
-        waveform, over the track's own pitch contour.
+        This project has no track yet. Load an MP3 to sing or play along with it; it's saved with the
+        project, so you only need to do this once.
       </p>
       <div className="file-row">
         <label>

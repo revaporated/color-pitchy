@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { PitchTrack } from '../audio/frames';
+import { getReference, saveReference } from '../storage/projects';
 import { PIXELS_PER_SECOND } from '../utils/waveform';
 import type { PrepRequest, PrepResponse } from '../workers/trackPrep.worker';
 import type { ReferenceRequest, ReferenceResponse } from '../workers/referencePitch.worker';
@@ -9,6 +10,17 @@ const REFERENCE_WINDOW_SECONDS = 0.046; // about 2048 samples at 44.1 kHz
 const LONG_TRACK_SECONDS = 600;
 /** Upper bound on parallel reference workers. */
 const MAX_REFERENCE_WORKERS = 4;
+/**
+ * Bump whenever the reference analysis changes (worker code, window sizes,
+ * grid), so contours cached in the library are recomputed instead of reused.
+ */
+export const REFERENCE_CACHE_VERSION = 1;
+
+/** Cache key for a reference contour. Smoothing only affects the top-voice tracker. */
+export function referenceCacheKey(audioId: string, method: ReferenceRequest['method'], smoothing: number) {
+  const variant = method === 'topVoice' ? `topVoice:${smoothing}` : method;
+  return `${audioId}|${variant}|v${REFERENCE_CACHE_VERSION}`;
+}
 
 export type ReferenceState =
   | { status: 'idle'; track: null; progress: 0 }
@@ -42,6 +54,13 @@ export function useTrackAnalysis(
   method: ReferenceRequest['method'] = 'pitchy',
   /** Top-voice tracker switch cost (see ReferenceRequest.smoothing). */
   smoothing = 4,
+  /**
+   * Library id of the audio. When set, the contour is read from and written to
+   * the library's cache, so reopening a project skips the analysis.
+   */
+  audioId: string | null = null,
+  /** Change to re-run the analysis (clear the cache first to force a recompute). */
+  refreshToken = 0,
 ): TrackAnalysis {
   const [peaks, setPeaks] = useState<Float32Array | null>(null);
   const [reference, setReference] = useState<ReferenceState>(IDLE);
@@ -63,6 +82,19 @@ export function useTrackAnalysis(
       stopAll();
       setReference({ status: 'error', track: null, progress: 0, message });
     };
+
+    const cacheKey = audioId ? referenceCacheKey(audioId, method, smoothing) : null;
+    const cached: Promise<PitchTrack | null> = cacheKey
+      ? getReference(cacheKey)
+          .then((record) =>
+            record ? PitchTrack.fromArrays(record.frequency, record.clarity, record.gridHz) : null,
+          )
+          .catch(() => null)
+      : Promise.resolve(null);
+    // A cached contour is shown straight away, before the peaks are even ready.
+    void cached.then((track) => {
+      if (!cancelled && track) setReference({ status: 'ready', track, progress: 1 });
+    });
 
     const runReference = (samples: Float32Array, sampleRate: number) => {
       const duration = samples.length / sampleRate;
@@ -115,6 +147,11 @@ export function useTrackAnalysis(
                 track: PitchTrack.fromArrays(frequency, clarity, gridHz),
                 progress: 1,
               });
+              if (cacheKey && audioId) {
+                void saveReference({ key: cacheKey, audioId, gridHz, frequency, clarity }).catch(
+                  () => undefined,
+                );
+              }
             }
           } else {
             fail(message.message);
@@ -146,7 +183,10 @@ export function useTrackAnalysis(
         setPeaks(message.peaks);
       } else if (message.type === 'mono') {
         prep.terminate();
-        runReference(message.samples, message.sampleRate);
+        const { samples, sampleRate } = message;
+        void cached.then((track) => {
+          if (!cancelled && !track) runReference(samples, sampleRate);
+        });
       } else {
         fail(message.message);
       }
@@ -170,7 +210,7 @@ export function useTrackAnalysis(
       cancelled = true;
       stopAll();
     };
-  }, [audioBuffer, method, smoothing]);
+  }, [audioBuffer, method, smoothing, audioId, refreshToken]);
 
   return { peaks, reference };
 }

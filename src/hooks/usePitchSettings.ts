@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
+import type { ProjectSettings } from '../storage/projects';
 import type { DetectionFilter } from '../utils/pitch';
 
 const PREFIX = 'color-pitchy:';
@@ -86,18 +87,28 @@ export function usePitchSettings() {
   return { controls, filter };
 }
 
-/** Settings that only Studio uses. */
-export function useStudioSettings() {
+/**
+ * Settings that only Studio uses. The reference settings belong to the open
+ * project (they depend on the song); the rest depend on your setup and are global.
+ */
+export function useStudioSettings(initial: ProjectSettings) {
   const [recordTake, setRecordTake] = usePersistentState('studio.recordTake', false);
   const [onlyWhilePlaying, setOnlyWhilePlaying] = usePersistentState('studio.onlyWhilePlaying', true);
-  const [showReference, setShowReference] = usePersistentState('studio.showReference', true);
-  const [referenceClarity, setReferenceClarity] = usePersistentState('studio.referenceClarity', 0.8);
-  const [topVoiceReference, setTopVoiceReference] = usePersistentState('studio.topVoiceReference', false);
-  const [referenceSmoothing, setReferenceSmoothing] = usePersistentState('studio.referenceSmoothing', 4);
-  const [referenceOpacity, setReferenceOpacity] = usePersistentState('studio.referenceOpacity', 0.16);
   const [syncOffsetMs, setSyncOffsetMs] = usePersistentState('studio.syncOffsetMs', 0);
 
+  const [showReference, setShowReference] = useState(initial.showReference);
+  const [referenceClarity, setReferenceClarity] = useState(initial.referenceClarity);
+  const [topVoiceReference, setTopVoiceReference] = useState(initial.topVoiceReference);
+  const [referenceSmoothing, setReferenceSmoothing] = useState(initial.referenceSmoothing);
+  const [referenceOpacity, setReferenceOpacity] = useState(initial.referenceOpacity);
+
+  const projectSettings: ProjectSettings = useMemo(
+    () => ({ showReference, referenceClarity, topVoiceReference, referenceSmoothing, referenceOpacity }),
+    [showReference, referenceClarity, topVoiceReference, referenceSmoothing, referenceOpacity],
+  );
+
   return {
+    projectSettings,
     recordTake,
     setRecordTake,
     onlyWhilePlaying,
