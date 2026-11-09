@@ -18,6 +18,7 @@ type Props = {
   colorizeMarker: boolean;
   showNoteLines: boolean;
   showNoteTrails: boolean;
+  trailOpacity: number;
   showDiagnostics: boolean;
   minDetectableNote: number;
   maxDetectableNote: number;
@@ -29,6 +30,7 @@ type Props = {
   setColorizeMarker: Dispatch<SetStateAction<boolean>>;
   setShowNoteLines: Dispatch<SetStateAction<boolean>>;
   setShowNoteTrails: Dispatch<SetStateAction<boolean>>;
+  setTrailOpacity: Dispatch<SetStateAction<number>>;
   setShowDiagnostics: Dispatch<SetStateAction<boolean>>;
   setMinDetectableNote: Dispatch<SetStateAction<number>>;
   setMaxDetectableNote: Dispatch<SetStateAction<number>>;
@@ -50,6 +52,7 @@ export function PitchControls({
   colorizeMarker,
   showNoteLines,
   showNoteTrails,
+  trailOpacity,
   showDiagnostics,
   minDetectableNote,
   maxDetectableNote,
@@ -61,6 +64,7 @@ export function PitchControls({
   setColorizeMarker,
   setShowNoteLines,
   setShowNoteTrails,
+  setTrailOpacity,
   setShowDiagnostics,
   setMinDetectableNote,
   setMaxDetectableNote,
@@ -429,6 +433,18 @@ export function PitchControls({
           onChange={(event) => setShowNoteTrails(event.target.checked)}
         />
         Note trails
+      </label>
+
+      <label>
+        Trail opacity: {Math.round(trailOpacity * 100)}%
+        <input
+          type="range"
+          min={0.05}
+          max={1}
+          step={0.01}
+          value={trailOpacity}
+          onChange={(event) => setTrailOpacity(parseFloat(event.target.value))}
+        />
       </label>
 
       <label className="checkbox">

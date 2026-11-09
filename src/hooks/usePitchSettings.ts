@@ -42,6 +42,7 @@ export function usePitchSettings() {
   const [colorizeMarker, setColorizeMarker] = usePersistentState('colorizeMarker', true);
   const [showNoteLines, setShowNoteLines] = usePersistentState('showNoteLines', false);
   const [showNoteTrails, setShowNoteTrails] = usePersistentState('showNoteTrails', false);
+  const [trailOpacity, setTrailOpacity] = usePersistentState('trailOpacity', 0.28);
   const [showDiagnostics, setShowDiagnostics] = usePersistentState('showDiagnostics', false);
   const [minDetectableNote, setMinDetectableNote] = usePersistentState('minDetectableNote', 36);
   const [maxDetectableNote, setMaxDetectableNote] = usePersistentState('maxDetectableNote', 96);
@@ -65,6 +66,7 @@ export function usePitchSettings() {
     colorizeMarker,
     showNoteLines,
     showNoteTrails,
+    trailOpacity,
     showDiagnostics,
     minDetectableNote,
     maxDetectableNote,
@@ -75,6 +77,7 @@ export function usePitchSettings() {
     setColorizeMarker,
     setShowNoteLines,
     setShowNoteTrails,
+    setTrailOpacity,
     setShowDiagnostics,
     setMinDetectableNote,
     setMaxDetectableNote,
@@ -89,6 +92,8 @@ export function useStudioSettings() {
   const [onlyWhilePlaying, setOnlyWhilePlaying] = usePersistentState('studio.onlyWhilePlaying', true);
   const [showReference, setShowReference] = usePersistentState('studio.showReference', true);
   const [referenceClarity, setReferenceClarity] = usePersistentState('studio.referenceClarity', 0.8);
+  const [topVoiceReference, setTopVoiceReference] = usePersistentState('studio.topVoiceReference', false);
+  const [referenceOpacity, setReferenceOpacity] = usePersistentState('studio.referenceOpacity', 0.16);
   const [syncOffsetMs, setSyncOffsetMs] = usePersistentState('studio.syncOffsetMs', 0);
 
   return {
@@ -100,6 +105,10 @@ export function useStudioSettings() {
     setShowReference,
     referenceClarity,
     setReferenceClarity,
+    referenceOpacity,
+    setReferenceOpacity,
+    topVoiceReference,
+    setTopVoiceReference,
     syncOffsetMs,
     setSyncOffsetMs,
   };

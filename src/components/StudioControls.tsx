@@ -13,6 +13,10 @@ type Props = {
   setShowReference: Dispatch<SetStateAction<boolean>>;
   referenceClarity: number;
   setReferenceClarity: Dispatch<SetStateAction<number>>;
+  referenceOpacity: number;
+  topVoiceReference: boolean;
+  setTopVoiceReference: Dispatch<SetStateAction<boolean>>;
+  setReferenceOpacity: Dispatch<SetStateAction<number>>;
   syncOffsetMs: number;
   setSyncOffsetMs: Dispatch<SetStateAction<number>>;
   reference: ReferenceState;
@@ -32,6 +36,10 @@ export function StudioControls({
   setShowReference,
   referenceClarity,
   setReferenceClarity,
+  referenceOpacity,
+  setReferenceOpacity,
+  topVoiceReference,
+  setTopVoiceReference,
   syncOffsetMs,
   setSyncOffsetMs,
   reference,
@@ -97,6 +105,15 @@ export function StudioControls({
         <span className="studio-hint">{referenceStatus}</span>
       </label>
 
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={topVoiceReference}
+          onChange={(event) => setTopVoiceReference(event.target.checked)}
+        />
+        Top-voice reference (for chords and piano)
+      </label>
+
       <label>
         Reference clarity: {Math.round(referenceClarity * 100)}%
         <input
@@ -106,6 +123,18 @@ export function StudioControls({
           step={0.01}
           value={referenceClarity}
           onChange={(event) => setReferenceClarity(parseFloat(event.target.value))}
+        />
+      </label>
+
+      <label>
+        Reference opacity: {Math.round(referenceOpacity * 100)}%
+        <input
+          type="range"
+          min={0.05}
+          max={1}
+          step={0.01}
+          value={referenceOpacity}
+          onChange={(event) => setReferenceOpacity(parseFloat(event.target.value))}
         />
       </label>
 

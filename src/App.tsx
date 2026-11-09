@@ -74,6 +74,7 @@ export default function App() {
           colorizeMarker={controls.colorizeMarker}
           showNoteLines={controls.showNoteLines}
           showNoteTrails={controls.showNoteTrails}
+          trailOpacity={controls.trailOpacity}
           showDiagnostics={controls.showDiagnostics}
           height={isFullscreen ? undefined : 320}
         />

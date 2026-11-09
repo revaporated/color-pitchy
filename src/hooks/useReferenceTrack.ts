@@ -37,7 +37,10 @@ function referenceWorkerCount() {
  *    part of the track, and the parts are stitched into one reference contour.
  * The main thread only copies the channel data out of the AudioBuffer.
  */
-export function useTrackAnalysis(audioBuffer: AudioBuffer | null): TrackAnalysis {
+export function useTrackAnalysis(
+  audioBuffer: AudioBuffer | null,
+  method: ReferenceRequest['method'] = 'pitchy',
+): TrackAnalysis {
   const [peaks, setPeaks] = useState<Float32Array | null>(null);
   const [reference, setReference] = useState<ReferenceState>(IDLE);
 
@@ -121,6 +124,7 @@ export function useTrackAnalysis(audioBuffer: AudioBuffer | null): TrackAnalysis
           windowSize,
           binStart,
           binEnd,
+          method,
         };
         worker.postMessage(request, [slice.buffer]);
       }
@@ -159,7 +163,7 @@ export function useTrackAnalysis(audioBuffer: AudioBuffer | null): TrackAnalysis
       cancelled = true;
       stopAll();
     };
-  }, [audioBuffer]);
+  }, [audioBuffer, method]);
 
   return { peaks, reference };
 }

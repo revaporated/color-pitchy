@@ -66,7 +66,7 @@ export default function StudioPage() {
   // aren't recording; it's cleared on every seek so it only shows this pass.
   const take = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
   const preview = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
-  const { peaks, reference } = useTrackAnalysis(audioBuffer);
+  const { peaks, reference } = useTrackAnalysis(audioBuffer, studio.topVoiceReference ? 'topVoice' : 'pitchy');
   const referenceFilter: DetectionFilter = useMemo(
     () => ({
       clarityThreshold: studio.referenceClarity,
@@ -103,6 +103,7 @@ export default function StudioPage() {
 
   // Waveform view state
   const viewportRef = useRef<HTMLDivElement>(null);
+  const playheadXRef = useRef<number | null>(null);
   const [viewMode, setViewMode] = useState<'pan' | 'select'>('pan');
   const [panMode, setPanMode] = useState<'scroll' | 'scrub'>('scroll');
   const [loopEnabled, setLoopEnabled] = useState(false);
@@ -216,6 +217,8 @@ export default function StudioPage() {
             previewSeconds: controls.historyDuration,
             reference: studio.showReference ? reference.track : null,
             referenceFilter,
+            referenceOpacity: studio.referenceOpacity,
+            playheadXRef,
             showLiveMarker: armed && detectionActive,
           }}
           engine={engine}
@@ -223,6 +226,7 @@ export default function StudioPage() {
           colorizeMarker={controls.colorizeMarker}
           showNoteLines={controls.showNoteLines}
           showNoteTrails={controls.showNoteTrails}
+          trailOpacity={controls.trailOpacity}
           showDiagnostics={controls.showDiagnostics}
           height={GRAPH_HEIGHT}
           onSeek={hasAudio ? seekTo : undefined}
@@ -240,6 +244,7 @@ export default function StudioPage() {
           viewMode={viewMode}
           panMode={panMode}
           viewportRef={viewportRef}
+          playheadXRef={playheadXRef}
           selection={selection}
           onSelectionChange={handleSelectionChange}
         />
@@ -287,6 +292,10 @@ export default function StudioPage() {
         setShowReference={studio.setShowReference}
         referenceClarity={studio.referenceClarity}
         setReferenceClarity={studio.setReferenceClarity}
+        referenceOpacity={studio.referenceOpacity}
+        topVoiceReference={studio.topVoiceReference}
+        setTopVoiceReference={studio.setTopVoiceReference}
+        setReferenceOpacity={studio.setReferenceOpacity}
         syncOffsetMs={studio.syncOffsetMs}
         setSyncOffsetMs={studio.setSyncOffsetMs}
         reference={reference}

@@ -36,6 +36,9 @@ export type TimelineGraphMode = {
   previewSeconds: number;
   reference: FrameSource | null;
   referenceFilter: DetectionFilter;
+  referenceOpacity: number;
+  /** The waveform's playhead x (viewport px). The graph draws its playhead there so the two line up exactly. */
+  playheadXRef?: RefObject<number | null>;
   /** Draw the current mic pitch at the playhead. */
   showLiveMarker: boolean;
 };
@@ -47,6 +50,7 @@ type Props = {
   colorizeMarker: boolean;
   showNoteLines: boolean;
   showNoteTrails: boolean;
+  trailOpacity: number;
   showDiagnostics: boolean;
   height?: number;
   /** Timeline only: clicking the graph seeks here (seconds). */
@@ -58,8 +62,6 @@ const BACKGROUND = '#f8fafc';
 const TAKE_LINE = '#334155';
 const MAX_GAP_SECONDS = 0.06; // break lines across gaps longer than this
 const MARKER_MAX_AGE = 0.25; // seconds; older frames don't get a "current" marker
-const TRAIL_ALPHA = 0.28;
-const REFERENCE_ALPHA = 0.16;
 /**
  * Live mode repaints only this much of the right edge each frame. Frames are
  * stamped at the middle of their analysis window and reach the main thread a
@@ -262,7 +264,13 @@ export function PitchGraph(props: Props) {
         t0 = scrollLeft / xScale;
         t1 = (scrollLeft + width) / xScale;
         const songNow = mode.clock.songTimeAt(nowMs);
-        markerX = Math.max(0, Math.min(songNow * xScale + xOffset, width - PLAYHEAD_WIDTH));
+        // Use the waveform's playhead position (it runs earlier in the same frame)
+        // so both playheads are the same pixel. Fall back when there's no waveform.
+        const sharedX = mode.playheadXRef?.current;
+        markerX =
+          sharedX != null
+            ? sharedX
+            : Math.max(0, Math.min(songNow * xScale + xOffset, width - PLAYHEAD_WIDTH));
         showMarker = mode.showLiveMarker;
         mainSource = mode.take;
         reference = mode.reference;
@@ -322,6 +330,7 @@ export function PitchGraph(props: Props) {
           hi,
           p.filter,
           p.showNoteTrails,
+          p.trailOpacity,
           scratchRuns,
         );
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -331,27 +340,27 @@ export function PitchGraph(props: Props) {
         if (mode.recordingStartAt !== null) {
           // Use the layer's edge time so the line stays glued to the scrolled history.
           const x = width - (liveLayer.t1 - mode.recordingStartAt) * xScale;
-          drawVerticalLine(ctx, x, h, '#ef4444', 2, 0.7);
+          drawVerticalLine(ctx, x, h, '#ef4444', 2, 0.7, dpr);
         }
       } else {
         if (reference) {
           const runs = referenceCache.get(reference, mode.referenceFilter);
-          drawRuns(ctx, runs, t0, t1, xScale, xOffset, lo, hi, h, width, REFERENCE_ALPHA);
+          drawRuns(ctx, runs, t0, t1, xScale, xOffset, lo, hi, h, width, mode.referenceOpacity);
         }
         const hasPreview = previewSource !== null && previewT1 > previewT0;
         if (p.showNoteTrails) {
           collectRuns(mainSource, t0 - MAX_GAP_SECONDS, t1, p.filter, scratchRuns);
-          drawRuns(ctx, scratchRuns, t0, t1, xScale, xOffset, lo, hi, h, width, TRAIL_ALPHA);
+          drawRuns(ctx, scratchRuns, t0, t1, xScale, xOffset, lo, hi, h, width, p.trailOpacity);
           if (previewSource && hasPreview) {
             collectRuns(previewSource, previewT0 - MAX_GAP_SECONDS, previewT1, p.filter, scratchRuns);
-            drawRuns(ctx, scratchRuns, previewT0, previewT1, xScale, xOffset, lo, hi, h, width, TRAIL_ALPHA);
+            drawRuns(ctx, scratchRuns, previewT0, previewT1, xScale, xOffset, lo, hi, h, width, p.trailOpacity);
           }
         }
         drawPitchLine(ctx, mainSource, t0, t1, xScale, xOffset, lo, hi, h, p.filter, MAX_GAP_SECONDS);
         if (previewSource && hasPreview) {
           drawPitchLine(ctx, previewSource, previewT0, previewT1, xScale, xOffset, lo, hi, h, p.filter, 0);
         }
-        drawVerticalLine(ctx, markerX, h, '#94a3b8', 1, 0.7);
+        drawVerticalLine(ctx, markerX, h, '#94a3b8', 1, 0.7, dpr);
       }
 
       if (latestMidi !== null) {
@@ -725,6 +734,7 @@ class LiveLayer {
   private clarity = Number.NaN;
   private cents = Number.NaN;
   private showTrails = false;
+  private trailOpacity = Number.NaN;
   /** Performance-clock time at the layer's right edge. */
   t1 = Number.NaN;
 
@@ -742,6 +752,7 @@ class LiveLayer {
     hi: number,
     filter: DetectionFilter,
     showTrails: boolean,
+    trailOpacity: number,
     runs: NoteRuns,
   ): HTMLCanvasElement {
     const changed =
@@ -756,7 +767,8 @@ class LiveLayer {
       hi !== this.hi ||
       filter.clarityThreshold !== this.clarity ||
       filter.centsThreshold !== this.cents ||
-      showTrails !== this.showTrails;
+      showTrails !== this.showTrails ||
+      trailOpacity !== this.trailOpacity;
 
     if (changed) {
       if (pixelWidth !== this.pixelWidth || pixelHeight !== this.pixelHeight) {
@@ -777,6 +789,7 @@ class LiveLayer {
       this.clarity = filter.clarityThreshold;
       this.cents = filter.centsThreshold;
       this.showTrails = showTrails;
+      this.trailOpacity = trailOpacity;
     }
 
     const pxPerSecond = width / historyDuration;
@@ -839,12 +852,17 @@ class LiveLayer {
     const xOffset = this.width - this.t1 * pxPerSecond;
     if (this.showTrails) {
       collectRuns(source, from - MAX_GAP_SECONDS, to, filter, runs);
-      drawRuns(ctx, runs, from, to, pxPerSecond, xOffset, this.lo, this.hi, this.height, this.width, TRAIL_ALPHA);
+      drawRuns(ctx, runs, from, to, pxPerSecond, xOffset, this.lo, this.hi, this.height, this.width, this.trailOpacity);
     }
     drawPitchLine(ctx, source, from, to, pxPerSecond, xOffset, this.lo, this.hi, this.height, filter, MAX_GAP_SECONDS);
   }
 }
 
+/**
+ * A full-height line as a filled rectangle whose left edge is snapped to a
+ * device pixel. A stroked line centered on a fractional x is antialiased
+ * across two pixels, and as x moves that blur shifts, which reads as jitter.
+ */
 function drawVerticalLine(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -852,16 +870,13 @@ function drawVerticalLine(
   color: string,
   lineWidth: number,
   alpha: number,
+  dpr: number,
 ) {
   if (!Number.isFinite(x)) return;
   ctx.save();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = lineWidth;
+  ctx.fillStyle = color;
   ctx.globalAlpha = alpha;
-  ctx.beginPath();
-  ctx.moveTo(x, 0);
-  ctx.lineTo(x, h);
-  ctx.stroke();
+  ctx.fillRect(Math.round(x * dpr) / dpr, 0, lineWidth, h);
   ctx.restore();
 }
 

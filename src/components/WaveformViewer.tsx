@@ -65,6 +65,8 @@ type Props = {
   panMode?: 'scroll' | 'scrub'
   /** Lets a sibling (the Studio pitch graph) read this viewport's scroll position. */
   viewportRef?: RefObject<HTMLDivElement | null>
+  /** Written with the playhead's x within the viewport, so the pitch graph draws its line at the same spot. */
+  playheadXRef?: RefObject<number | null>
   selection: { start: number; end: number } | null
   onSelectionChange: (selection: { start: number; end: number } | null) => void
 }
@@ -82,6 +84,7 @@ export const WaveformViewer = ({
   viewMode,
   panMode = 'scroll',
   viewportRef: externalViewportRef,
+  playheadXRef,
   selection,
   onSelectionChange,
 }: Props) => {
@@ -281,19 +284,28 @@ export const WaveformViewer = ({
       if (!shouldKeepScroll) {
         viewport.scrollLeft = clamped
       }
-      const activeScrollLeft = shouldKeepScroll ? viewport.scrollLeft : clamped
+      // The browser rounds scrollLeft to whole (device) pixels, so the scroll it
+      // actually applied can differ from `clamped` by a fraction of a pixel.
+      const appliedScrollLeft = viewport.scrollLeft
+      // Place the playhead from the scroll we asked for, so while following it
+      // sits exactly at the center instead of wobbling with that rounding...
+      const desiredScrollLeft = shouldKeepScroll ? appliedScrollLeft : clamped
+      const rawPlayheadLeft = time * PIXELS_PER_SECOND - desiredScrollLeft
+      const maxPlayheadLeft = Math.max(0, viewportWidth - PLAYHEAD_WIDTH)
+      const dpr = window.devicePixelRatio || 1
+      // ...snapped to a device pixel so it never straddles two pixels...
+      const playheadLeft =
+        Math.round(Math.max(0, Math.min(rawPlayheadLeft, maxPlayheadLeft)) * dpr) / dpr
+      if (playheadXRef) playheadXRef.current = playheadLeft
       const playhead = playheadRef.current
       if (playhead) {
-        const rawPlayheadLeft = time * PIXELS_PER_SECOND - activeScrollLeft
-        const maxPlayheadLeft = Math.max(0, viewportWidth - PLAYHEAD_WIDTH)
-        const playheadLeft = Math.max(0, Math.min(rawPlayheadLeft, maxPlayheadLeft))
-        const compensatedLeft = playheadLeft + activeScrollLeft
-        playhead.style.transform = `translateX(${compensatedLeft}px)`
+        // ...and offset by the scroll that was really applied, since it lives inside the scrolled content.
+        playhead.style.transform = `translateX(${playheadLeft + appliedScrollLeft}px)`
       }
 
       updateHoverLine()
     },
-    [panMode, updateHoverLine, viewMode, waveformWidth],
+    [panMode, playheadXRef, updateHoverLine, viewMode, waveformWidth],
   )
 
   useEffect(() => {
