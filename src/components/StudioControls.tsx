@@ -102,38 +102,40 @@ export function StudioControls({
         {recordTake && !micArmed && <span className="studio-hint">Start the mic to record.</span>}
       </div>
 
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={onlyWhilePlaying}
-          onChange={(event) => setOnlyWhilePlaying(event.target.checked)}
-        />
-        Only detect while the track is playing
-      </label>
+      <div className="checkbox-group">
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={onlyWhilePlaying}
+            onChange={(event) => setOnlyWhilePlaying(event.target.checked)}
+          />
+          Only detect while the track is playing
+        </label>
 
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={showReference}
-          onChange={(event) => setShowReference(event.target.checked)}
-        />
-        Show reference
-      </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={showReference}
+            onChange={(event) => setShowReference(event.target.checked)}
+          />
+          Show reference
+        </label>
 
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={playReference}
-          onChange={(event) => setPlayReference(event.target.checked)}
-        />
-        Play reference as MIDI
-        <InfoTip>
-          Plays the reference notes with a simple synth while the track plays, so you can hear
-          where the analysis is wrong. Turn the track volume down to hear the notes on their own.
-        </InfoTip>
-      </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={playReference}
+            onChange={(event) => setPlayReference(event.target.checked)}
+          />
+          Play reference as MIDI
+          <InfoTip>
+            Plays the reference notes with a simple synth while the track plays, so you can hear
+            where the analysis is wrong. Turn the track volume down to hear the notes on their own.
+          </InfoTip>
+        </label>
+      </div>
 
-      {playReference && (
+      <div className="control-pair">
         <label className="slider-row">
           <span className="slider-row__text">Reference volume: {Math.round(referenceVolume * 100)}%</span>
           <input
@@ -142,46 +144,50 @@ export function StudioControls({
             max={1}
             step={0.01}
             value={referenceVolume}
+            disabled={!playReference}
+            title={playReference ? undefined : 'Turn on "Play reference as MIDI" to use this'}
             onChange={(event) => setReferenceVolume(parseFloat(event.target.value))}
           />
         </label>
-      )}
 
-      <label className="slider-row">
-        <span className="slider-row__text">Track volume: {Math.round(trackVolume * 100)}%</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={trackVolume}
-          onChange={(event) => setTrackVolume(parseFloat(event.target.value))}
-        />
-      </label>
+        <label className="slider-row">
+          <span className="slider-row__text">Track volume: {Math.round(trackVolume * 100)}%</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={trackVolume}
+            onChange={(event) => setTrackVolume(parseFloat(event.target.value))}
+          />
+        </label>
+      </div>
 
-      <label className="slider-row">
-        <span className="slider-row__text">Reference clarity: {Math.round(referenceClarity * 100)}%</span>
-        <input
-          type="range"
-          min={0.3}
-          max={1}
-          step={0.01}
-          value={referenceClarity}
-          onChange={(event) => setReferenceClarity(parseFloat(event.target.value))}
-        />
-      </label>
+      <div className="control-pair">
+        <label className="slider-row">
+          <span className="slider-row__text">Reference clarity: {Math.round(referenceClarity * 100)}%</span>
+          <input
+            type="range"
+            min={0.3}
+            max={1}
+            step={0.01}
+            value={referenceClarity}
+            onChange={(event) => setReferenceClarity(parseFloat(event.target.value))}
+          />
+        </label>
 
-      <label className="slider-row">
-        <span className="slider-row__text">Reference opacity: {Math.round(referenceOpacity * 100)}%</span>
-        <input
-          type="range"
-          min={0.05}
-          max={1}
-          step={0.01}
-          value={referenceOpacity}
-          onChange={(event) => setReferenceOpacity(parseFloat(event.target.value))}
-        />
-      </label>
+        <label className="slider-row">
+          <span className="slider-row__text">Reference opacity: {Math.round(referenceOpacity * 100)}%</span>
+          <input
+            type="range"
+            min={0.05}
+            max={1}
+            step={0.01}
+            value={referenceOpacity}
+            onChange={(event) => setReferenceOpacity(parseFloat(event.target.value))}
+          />
+        </label>
+      </div>
 
       <label className="slider-row">
         <span className="slider-row__text">Sync offset: {syncOffsetMs} ms</span>

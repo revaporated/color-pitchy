@@ -8,6 +8,7 @@ import {
   FiSettings,
 } from 'react-icons/fi';
 import { midiToNoteName } from '../utils/pitch';
+import { Stepper } from './Stepper';
 
 type Props = {
   enabled: boolean;
@@ -352,47 +353,31 @@ export function PitchControls({
         {enabled ? 'Stop mic' : 'Start mic'}
       </button>
 
-      <label className="slider-row">
-        <span className="slider-row__text">Clarity threshold: {Math.round(clarityThreshold * 100)}%</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={clarityThreshold}
-          onChange={(event) => setClarityThreshold(parseFloat(event.target.value))}
+      <div className="stepper-group">
+        <Stepper
+          label="Clarity"
+          value={`${Math.round(clarityThreshold * 100)}%`}
+          onStep={(direction) => adjustClarity(direction * 0.01)}
+          canDecrease={clarityThreshold > 0}
+          canIncrease={clarityThreshold < 1}
         />
-      </label>
-
-      <label className="slider-row">
-        <span className="slider-row__text">FFT size: {FFT_SIZES[fftIndex]}</span>
-        <input
-          type="range"
-          min={0}
-          max={FFT_SIZES.length - 1}
-          step={1}
-          value={fftIndex}
-          onChange={(event) =>
-            setFftSize(FFT_SIZES[parseInt(event.target.value, 10)])
-          }
+        <Stepper
+          label="FFT size"
+          value={String(FFT_SIZES[fftIndex])}
+          onStep={adjustFft}
+          canDecrease={fftIndex > 0}
+          canIncrease={fftIndex < FFT_SIZES.length - 1}
         />
-      </label>
-
-      {showHistory && (
-      <label className="slider-row">
-        <span className="slider-row__text">History (seconds): {historyDuration}</span>
-        <input
-          type="range"
-          min={1}
-          max={10}
-          step={1}
-          value={historyDuration}
-          onChange={(event) =>
-            setHistoryDuration(parseInt(event.target.value, 10))
-          }
-        />
-      </label>
-      )}
+        {showHistory && (
+          <Stepper
+            label="History"
+            value={`${historyDuration}s`}
+            onStep={adjustHistory}
+            canDecrease={historyDuration > 1}
+            canIncrease={historyDuration < 10}
+          />
+        )}
+      </div>
 
       <label className="slider-row">
         <span className="slider-row__text">Cents threshold: ±{centsThreshold}c</span>

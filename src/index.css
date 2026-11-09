@@ -900,3 +900,74 @@ button:disabled {
   align-items: center;
   gap: 10px;
 }
+
+/* One font size for everything inside a controls card (divs used to fall back to 16px). */
+.controls {
+  font-size: 14px;
+}
+
+.analysis-panel__select {
+  font-size: inherit;
+}
+
+/* Compact steppers, laid out in a wrapping row */
+.stepper-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+}
+
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stepper__label {
+  margin-right: 4px;
+}
+
+.stepper__value {
+  min-width: 3.5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.stepper__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.stepper__button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Two slider rows side by side; stacks on narrow screens */
+.control-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 32px;
+}
+
+@media (max-width: 720px) {
+  .control-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Several checkboxes on one line */
+.checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+}
