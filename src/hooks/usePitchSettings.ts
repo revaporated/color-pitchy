@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { ProjectSettings } from '../storage/projects';
 import type { AnalysisSettings } from './useReferenceTrack';
 import type { SpectrogramView } from '../audio/spectrogramImage';
+import type { BeatScale } from '../audio/beatGrid';
 import type { DetectionFilter } from '../utils/pitch';
 
 const PREFIX = 'color-pitchy:';
@@ -105,6 +106,17 @@ export function useStudioSettings(initial: ProjectSettings) {
   const [spectrogramView, setSpectrogramView] = usePersistentState<SpectrogramView>('studio.spectrogramView', 'peaks');
   const [spectrogramRange, setSpectrogramRange] = usePersistentState('studio.spectrogramRange', 50);
   const [spectrogramOpacity, setSpectrogramOpacity] = usePersistentState('studio.spectrogramOpacity', 0.6);
+  const [showBeats, setShowBeats] = usePersistentState('studio.showBeats', true);
+  const [snapLoopToBeats, setSnapLoopToBeats] = usePersistentState('studio.snapLoopToBeats', true);
+  const [metronome, setMetronome] = usePersistentState('studio.metronome', false);
+  const [metronomeVolume, setMetronomeVolume] = usePersistentState('studio.metronomeVolume', 0.6);
+  // Per project: they depend on the song.
+  const [beatScale, setBeatScale] = useState<BeatScale>(() =>
+    initial.beatScale === 0.5 ? 0.5 : initial.beatScale === 2 ? 2 : 1,
+  );
+  const [beatsPerGroup, setBeatsPerGroup] = useState(initial.beatsPerGroup);
+  const [beatOffset, setBeatOffset] = useState(initial.beatOffset);
+  const [playbackRate, setPlaybackRate] = useState(initial.playbackRate);
 
   const [showReference, setShowReference] = useState(initial.showReference);
   const [referenceClarity, setReferenceClarity] = useState(initial.referenceClarity);
@@ -128,8 +140,12 @@ export function useStudioSettings(initial: ProjectSettings) {
       referenceWindowMs: analysis.windowMs,
       referenceMinMidi: analysis.minMidi,
       referenceMaxMidi: analysis.maxMidi,
+      beatScale,
+      beatsPerGroup,
+      beatOffset,
+      playbackRate,
     }),
-    [showReference, referenceClarity, referenceOpacity, analysis],
+    [showReference, referenceClarity, referenceOpacity, analysis, beatScale, beatsPerGroup, beatOffset, playbackRate],
   );
 
   return {
@@ -162,5 +178,21 @@ export function useStudioSettings(initial: ProjectSettings) {
     setSpectrogramRange,
     spectrogramOpacity,
     setSpectrogramOpacity,
+    showBeats,
+    setShowBeats,
+    snapLoopToBeats,
+    setSnapLoopToBeats,
+    metronome,
+    setMetronome,
+    metronomeVolume,
+    setMetronomeVolume,
+    beatScale,
+    setBeatScale,
+    beatsPerGroup,
+    setBeatsPerGroup,
+    beatOffset,
+    setBeatOffset,
+    playbackRate,
+    setPlaybackRate,
   };
 }

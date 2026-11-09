@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { FiPause, FiPlay, FiSquare } from 'react-icons/fi'
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop'
 import { LuHand, LuTextCursor } from 'react-icons/lu'
+import { Stepper } from './Stepper'
 
 type Props = {
   isPlaying: boolean
@@ -21,7 +22,13 @@ type Props = {
   onPanModeChange: (mode: 'scroll' | 'scrub') => void
   onToggleLoop: () => void
   onClearSelection: () => void
+  /** Playback speed (1 = normal). Pitch is kept. Omit to hide the control. */
+  playbackRate?: number
+  onPlaybackRateChange?: (rate: number) => void
 }
+
+const MIN_RATE = 0.25
+const MAX_RATE = 2
 
 const formatTimecode = (time: number) => {
   const totalHundredths = Math.max(0, Math.round(time * 100))
@@ -50,6 +57,8 @@ export const PlaybackControls = ({
   onPanModeChange,
   onToggleLoop,
   onClearSelection,
+  playbackRate,
+  onPlaybackRateChange,
 }: Props) => {
   return (
     <div className="playback-controls">
@@ -74,6 +83,26 @@ export const PlaybackControls = ({
         </button>
         {hasAudio && duration > 0 && (
           <Timecode getTime={getTime} getHoverTime={getHoverTime} duration={duration} />
+        )}
+        {playbackRate !== undefined && onPlaybackRateChange && (
+          <span className="playback-controls__speed">
+            <Stepper
+              label="Speed"
+              value={`${Math.round(playbackRate * 100)}%`}
+              onStep={(direction) =>
+                onPlaybackRateChange(
+                  Math.min(MAX_RATE, Math.max(MIN_RATE, Math.round((playbackRate + direction * 0.05) * 100) / 100)),
+                )
+              }
+              canDecrease={hasAudio && playbackRate > MIN_RATE}
+              canIncrease={hasAudio && playbackRate < MAX_RATE}
+            />
+            {playbackRate !== 1 && (
+              <button type="button" className="link-button" onClick={() => onPlaybackRateChange(1)}>
+                Reset
+              </button>
+            )}
+          </span>
         )}
       </div>
       <div className="playback-controls__row playback-controls__row--modes">

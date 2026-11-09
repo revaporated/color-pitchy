@@ -13,6 +13,9 @@ import {
 } from '../audio/noteEdits';
 import { NoteSet } from '../audio/noteSet';
 import { SpectrogramImage } from '../audio/spectrogramImage';
+import { BeatGrid } from '../audio/beatGrid';
+import { BeatControls } from '../components/BeatControls';
+import { useBeats } from '../hooks/useBeats';
 import { useSpectrogram } from '../hooks/useSpectrogram';
 import { ReferencePlayer } from '../audio/referencePlayer';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
@@ -194,6 +197,17 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     if (audioRef.current) audioRef.current.volume = studio.trackVolume;
   }, [audioRef, studio.trackVolume, audioUrl]);
 
+  // Playback speed, keeping pitch. The clock picks the rate up from the
+  // element's ratechange event, so the graph, take, reference playback and
+  // metronome all follow it.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.preservesPitch = true;
+    audio.defaultPlaybackRate = studio.playbackRate;
+    audio.playbackRate = studio.playbackRate;
+  }, [audioRef, studio.playbackRate, audioUrl]);
+
   // `take` keeps what you record. `preview` always follows the mic while the
   // track plays and is drawn as a short trail behind the playhead when you
   // aren't recording; it's cleared on every seek so it only shows this pass.
@@ -238,6 +252,16 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   const { analysis, setAnalysis } = studio;
   const { peaks, reference, mono } = useTrackAnalysis(audioBuffer, analysis, audio?.id ?? null, runToken);
 
+  // Beats: detected once per track; the grid applies your tempo and bar fixes.
+  const beatDetection = useBeats(mono);
+  const beatGrid = useMemo(
+    () =>
+      beatDetection.beats
+        ? new BeatGrid(beatDetection.beats, studio.beatScale, studio.beatsPerGroup, studio.beatOffset)
+        : null,
+    [beatDetection.beats, studio.beatScale, studio.beatsPerGroup, studio.beatOffset],
+  );
+
   // Spectrogram: computed once per track when first shown; the image is
   // rebuilt (cheaply) when the view or range changes.
   const spectrogram = useSpectrogram(mono, studio.showSpectrogram && hasAudio);
@@ -260,6 +284,10 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   const [referencePlayer] = useState(() => new ReferencePlayer(clock));
   useEffect(() => () => referencePlayer.dispose(), [referencePlayer]);
   useEffect(() => referencePlayer.setVolume(studio.referenceVolume), [referencePlayer, studio.referenceVolume]);
+  useEffect(
+    () => referencePlayer.setMetronomeVolume(studio.metronomeVolume),
+    [referencePlayer, studio.metronomeVolume],
+  );
 
   const referenceFilter: DetectionFilter = useMemo(
     () => ({
@@ -387,6 +415,10 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     referencePlayer.setEnabled(studio.playReference && hasAudio);
     return () => referencePlayer.setEnabled(false);
   }, [referencePlayer, studio.playReference, hasAudio]);
+  useEffect(() => {
+    referencePlayer.setMetronome(beatGrid, studio.metronome && hasAudio);
+    return () => referencePlayer.setMetronome(null, false);
+  }, [referencePlayer, beatGrid, studio.metronome, hasAudio]);
 
   // Write mic frames onto the take at the song position they were sung at.
   const recordingRef = useRef(false);
@@ -473,10 +505,16 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     [projectId, setError, stop, take, currentEdits, resetEdits],
   );
 
-  const handleSelectionChange = useCallback((next: Selection | null) => {
-    setSelection(next);
-    setLoopEnabled(Boolean(next));
-  }, []);
+  const snapGrid = studio.snapLoopToBeats ? beatGrid : null;
+  const handleSelectionChange = useCallback(
+    (next: Selection | null) => {
+      const snapped =
+        next && snapGrid ? { start: snapGrid.nearest(next.start), end: snapGrid.nearest(next.end) } : next;
+      setSelection(snapped);
+      setLoopEnabled(Boolean(snapped));
+    },
+    [snapGrid],
+  );
 
   const handleSelectionClear = useCallback(() => {
     setSelection(null);
@@ -600,6 +638,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
             reference: studio.showReference || pen ? referenceNotes : null,
             pen,
             spectrogram: studio.showSpectrogram ? spectrogramImage : null,
+            beats: studio.showBeats ? beatGrid : null,
             spectrogramOpacity: studio.spectrogramOpacity,
             referenceOpacity: studio.referenceOpacity,
             playheadXRef,
@@ -652,6 +691,8 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
           onPanModeChange={setPanMode}
           onToggleLoop={() => setLoopEnabled((value) => !value)}
           onClearSelection={handleSelectionClear}
+          playbackRate={studio.playbackRate}
+          onPlaybackRateChange={studio.setPlaybackRate}
         />
 
         <audio ref={audioRef} src={audioUrl ?? undefined} preload="auto" hidden />
@@ -671,6 +712,26 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         reference={reference}
         noteCount={referenceNotes?.count ?? null}
         onAnalyze={(next) => void analyze(next)}
+      />
+
+      <BeatControls
+        hasAudio={hasAudio}
+        detection={beatDetection}
+        bpm={beatGrid?.bpm ?? 0}
+        showBeats={studio.showBeats}
+        setShowBeats={studio.setShowBeats}
+        snapLoop={studio.snapLoopToBeats}
+        setSnapLoop={studio.setSnapLoopToBeats}
+        metronome={studio.metronome}
+        setMetronome={studio.setMetronome}
+        metronomeVolume={studio.metronomeVolume}
+        setMetronomeVolume={studio.setMetronomeVolume}
+        beatScale={studio.beatScale}
+        setBeatScale={studio.setBeatScale}
+        beatsPerGroup={studio.beatsPerGroup}
+        setBeatsPerGroup={studio.setBeatsPerGroup}
+        beatOffset={studio.beatOffset}
+        setBeatOffset={studio.setBeatOffset}
       />
 
       <StudioControls

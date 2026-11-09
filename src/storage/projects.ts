@@ -26,6 +26,14 @@ export type ProjectSettings = {
   /** Note range the reference analysis reports (MIDI). */
   referenceMinMidi: number;
   referenceMaxMidi: number;
+  /** Detected beats used as found (1), halved (0.5) or doubled (2). */
+  beatScale: number;
+  /** Beats per shaded group (usually a bar). */
+  beatsPerGroup: number;
+  /** Which beat starts the first group, 0..beatsPerGroup-1. */
+  beatOffset: number;
+  /** Playback speed; pitch is kept. */
+  playbackRate: number;
 };
 
 export type ProjectMeta = {
@@ -72,7 +80,14 @@ const BUILTIN_SETTINGS: ProjectSettings = {
   referenceWindowMs: 0,
   referenceMinMidi: 48,
   referenceMaxMidi: 96,
+  beatScale: 1,
+  beatsPerGroup: 4,
+  beatOffset: 0,
+  playbackRate: 1,
 };
+
+/** Settings that only make sense for the song they were set on, so a new project doesn't inherit them. */
+const SONG_SPECIFIC = new Set<keyof ProjectSettings>(['beatScale', 'beatOffset', 'playbackRate']);
 
 /** Projects saved before a setting existed get its built-in default. */
 function withSettingDefaults(project: ProjectMeta): ProjectMeta {
@@ -86,6 +101,7 @@ function withSettingDefaults(project: ProjectMeta): ProjectMeta {
 export function defaultProjectSettings(): ProjectSettings {
   const settings = { ...BUILTIN_SETTINGS };
   for (const key of Object.keys(settings) as (keyof ProjectSettings)[]) {
+    if (SONG_SPECIFIC.has(key)) continue;
     try {
       const raw = localStorage.getItem(LEGACY_PREFIX + key);
       if (raw === null) continue;

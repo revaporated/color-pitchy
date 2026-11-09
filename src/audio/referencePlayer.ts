@@ -1,3 +1,4 @@
+import type { BeatGrid } from './beatGrid';
 import type { NoteSet, RefNote } from './noteSet';
 import type { PlaybackClock } from './playbackClock';
 
@@ -28,8 +29,12 @@ export class ReferencePlayer {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private notes: NoteSet | null = null;
-  private enabled = false;
+  private notesEnabled = false;
   private volume = 0.5;
+  private beats: BeatGrid | null = null;
+  private clicksEnabled = false;
+  private clickVolume = 0.6;
+  private clickGain: GainNode | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly voices = new Set<Voice>();
   /** Song time up to which notes have been scheduled, or null to restart at the playhead. */
@@ -51,17 +56,40 @@ export class ReferencePlayer {
     if (this.ctx && this.master) this.master.gain.setTargetAtTime(volume, this.ctx.currentTime, 0.02);
   }
 
+  /** Play the reference notes. */
   setEnabled(enabled: boolean) {
-    if (enabled === this.enabled) return;
-    this.enabled = enabled;
-    if (enabled) {
+    if (enabled === this.notesEnabled) return;
+    this.notesEnabled = enabled;
+    this.updateRunning();
+  }
+
+  /** Metronome: a click on every beat of `beats`, accented on group starts. */
+  setMetronome(beats: BeatGrid | null, enabled: boolean) {
+    if (beats === this.beats && enabled === this.clicksEnabled) return;
+    this.beats = beats;
+    this.clicksEnabled = enabled;
+    this.updateRunning();
+  }
+
+  setMetronomeVolume(volume: number) {
+    this.clickVolume = volume;
+    if (this.ctx && this.clickGain) this.clickGain.gain.setTargetAtTime(volume, this.ctx.currentTime, 0.02);
+  }
+
+  private get running() {
+    return this.notesEnabled || this.clicksEnabled;
+  }
+
+  /** Starts or stops the scheduler, and reschedules from the playhead either way. */
+  private updateRunning() {
+    this.restart();
+    if (this.running && this.timer === null) {
       this.ensureContext();
       this.timer = setInterval(() => this.tick(), TICK_MS);
       this.tick();
-    } else {
-      if (this.timer !== null) clearInterval(this.timer);
+    } else if (!this.running && this.timer !== null) {
+      clearInterval(this.timer);
       this.timer = null;
-      this.restart();
     }
   }
 
@@ -76,7 +104,9 @@ export class ReferencePlayer {
   }
 
   dispose() {
-    this.setEnabled(false);
+    this.notesEnabled = false;
+    this.clicksEnabled = false;
+    this.updateRunning();
     void this.ctx?.close().catch(() => undefined);
     this.ctx = null;
     this.master = null;
@@ -92,8 +122,13 @@ export class ReferencePlayer {
     tone.type = 'lowpass';
     tone.frequency.value = 3200;
     master.connect(tone).connect(ctx.destination);
+    // Clicks bypass the lowpass so they stay crisp.
+    const clickGain = ctx.createGain();
+    clickGain.gain.value = this.clickVolume;
+    clickGain.connect(ctx.destination);
     this.ctx = ctx;
     this.master = master;
+    this.clickGain = clickGain;
   }
 
   /** Silences everything queued and schedules from the playhead on the next tick. */
@@ -119,9 +154,9 @@ export class ReferencePlayer {
   private tick() {
     const ctx = this.ctx;
     const clock = this.clock;
-    if (!ctx || !this.enabled) return;
+    if (!ctx || !this.running) return;
 
-    if (!clock.isPlaying || !this.notes) {
+    if (!clock.isPlaying) {
       // Only on the transition out of playback, so pen-mode auditions aren't cut off.
       if (this.scheduledUntil !== null) this.restart();
       return;
@@ -139,25 +174,61 @@ export class ReferencePlayer {
     const rate = clock.playbackRate || 1;
     const toCtx = (songTime: number) => ctxNow + (songTime - songNow) / rate;
     const horizon = songNow + LOOKAHEAD_SECONDS;
-    const notes = this.notes;
+    const notes = this.notesEnabled ? this.notes : null;
+    const beats = this.clicksEnabled ? this.beats : null;
 
     if (this.scheduledUntil === null) {
       // Fresh start: also pick up notes already sounding at the playhead.
-      notes.forEachOverlapping(songNow, songNow, (note) => {
+      notes?.forEachOverlapping(songNow, songNow, (note) => {
         if (note.start < songNow && note.end > songNow + 0.03) this.play(note, ctxNow, toCtx(note.end));
       });
       this.scheduledUntil = songNow;
     }
 
-    for (let i = notes.firstStartingAt(this.scheduledUntil); i < notes.count; i += 1) {
-      const note = notes.notes[i];
-      if (note.start >= horizon) break;
-      this.play(note, Math.max(ctxNow, toCtx(note.start)), toCtx(note.end));
+    if (notes) {
+      for (let i = notes.firstStartingAt(this.scheduledUntil); i < notes.count; i += 1) {
+        const note = notes.notes[i];
+        if (note.start >= horizon) break;
+        this.play(note, Math.max(ctxNow, toCtx(note.start)), toCtx(note.end));
+      }
+    }
+    if (beats) {
+      for (let i = beats.firstAtOrAfter(this.scheduledUntil); i < beats.count; i += 1) {
+        const time = beats.times[i];
+        if (time >= horizon) break;
+        this.click(Math.max(ctxNow, toCtx(time)), beats.isGroupStart(i));
+      }
     }
     this.scheduledUntil = horizon;
 
     // Forget voices that have finished.
     for (const voice of this.voices) if (voice.end < ctxNow) this.voices.delete(voice);
+  }
+
+  /** A short pitched tick; higher on group starts. */
+  private click(at: number, accent: boolean) {
+    const ctx = this.ctx;
+    const out = this.clickGain;
+    if (!ctx || !out) return;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = accent ? 1760 : 1320;
+    const gain = ctx.createGain();
+    const g = gain.gain;
+    const peak = accent ? 0.9 : 0.55;
+    g.setValueAtTime(0, at);
+    g.linearRampToValueAtTime(peak, at + 0.002);
+    g.setTargetAtTime(0, at + 0.002, 0.012);
+    osc.connect(gain).connect(out);
+    const stopAt = at + 0.08;
+    osc.start(at);
+    osc.stop(stopAt);
+    const voice: Voice = { oscillators: [osc], gain, end: stopAt };
+    osc.onended = () => {
+      gain.disconnect();
+      this.voices.delete(voice);
+    };
+    this.voices.add(voice);
   }
 
   private play(note: RefNote, start: number, end: number) {

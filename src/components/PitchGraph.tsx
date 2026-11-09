@@ -4,6 +4,7 @@ import type { FrameSource } from '../audio/frames';
 import { MIN_NOTE_SECONDS, newManualId, type NoteSpan } from '../audio/noteEdits';
 import type { NoteSet, RefNote } from '../audio/noteSet';
 import type { SpectrogramImage } from '../audio/spectrogramImage';
+import type { BeatGrid } from '../audio/beatGrid';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import type { PitchEngine } from '../audio/pitchEngine';
 import type { PlaybackClock } from '../audio/playbackClock';
@@ -44,6 +45,8 @@ export type TimelineGraphMode = {
   playheadXRef?: RefObject<number | null>;
   /** Draw the current mic pitch at the playhead. */
   showLiveMarker: boolean;
+  /** Beat ticks and alternating group shading. Null when off. */
+  beats?: BeatGrid | null;
   /** The track's spectrogram, drawn behind everything else. Null when off. */
   spectrogram?: SpectrogramImage | null;
   spectrogramOpacity?: number;
@@ -390,6 +393,7 @@ export function PitchGraph(props: Props) {
           drawVerticalLine(ctx, x, h, '#ef4444', 2, 0.7, dpr);
         }
       } else {
+        if (mode.beats) drawBeatBands(ctx, mode.beats, t0, t1, xScale, xOffset, width, h);
         if (mode.spectrogram) {
           mode.spectrogram.draw(ctx, t0, t1, xScale, xOffset, lo, hi, h, mode.spectrogramOpacity ?? 0.6);
         }
@@ -424,6 +428,7 @@ export function PitchGraph(props: Props) {
         if (previewSource && hasPreview) {
           drawPitchLine(ctx, previewSource, previewT0, previewT1, xScale, xOffset, lo, hi, h, p.filter, 0);
         }
+        if (mode.beats) drawBeatTicks(ctx, mode.beats, t0, t1, xScale, xOffset, h);
         drawVerticalLine(ctx, markerX, h, '#94a3b8', 1, 0.7, dpr);
       }
 
@@ -836,6 +841,64 @@ function drawRuns(
       currentFill = fill;
     }
     ctx.fillRect(left, Math.min(top, bottom), Math.max(2, right - left), Math.abs(bottom - top));
+  }
+  ctx.restore();
+}
+
+/** Every other group of beats (bar) gets a faint dark band. */
+function drawBeatBands(
+  ctx: CanvasRenderingContext2D,
+  beats: BeatGrid,
+  t0: number,
+  t1: number,
+  xScale: number,
+  xOffset: number,
+  width: number,
+  h: number,
+) {
+  const times = beats.times;
+  if (times.length < 2) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.045)';
+  // Start a group back so a band that began off-screen is still drawn.
+  const first = Math.max(0, beats.firstAtOrAfter(t0) - beats.perGroup);
+  for (let i = first; i < times.length; i += 1) {
+    if (times[i] > t1) break;
+    const group = beats.groupOf(i);
+    if (group % 2 === 0 || !beats.isGroupStart(i)) continue;
+    const end = i + beats.perGroup < times.length ? times[i + beats.perGroup] : times[times.length - 1];
+    const left = Math.max(0, xScale * times[i] + xOffset);
+    const right = Math.min(width, xScale * end + xOffset);
+    if (right > left) ctx.fillRect(left, 0, right - left, h);
+  }
+  ctx.restore();
+}
+
+/** Short ticks on the top and bottom edges at each beat, longer on group starts. */
+function drawBeatTicks(
+  ctx: CanvasRenderingContext2D,
+  beats: BeatGrid,
+  t0: number,
+  t1: number,
+  xScale: number,
+  xOffset: number,
+  h: number,
+) {
+  const times = beats.times;
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (let i = beats.firstAtOrAfter(t0 - 1 / xScale); i < times.length; i += 1) {
+    if (times[i] > t1) break;
+    const x = Math.round(xScale * times[i] + xOffset) + 0.5;
+    const major = beats.isGroupStart(i);
+    const length = major ? 12 : 6;
+    ctx.strokeStyle = major ? 'rgba(15, 23, 42, 0.55)' : 'rgba(15, 23, 42, 0.3)';
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, length);
+    ctx.moveTo(x, h - length);
+    ctx.lineTo(x, h);
+    ctx.stroke();
   }
   ctx.restore();
 }
