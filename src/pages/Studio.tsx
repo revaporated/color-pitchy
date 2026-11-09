@@ -16,6 +16,7 @@ import { useAudioPlayback } from '../hooks/useAudioPlayback';
 import { usePitchEngine } from '../hooks/usePitchEngine';
 import { usePitchSettings, useStudioSettings } from '../hooks/usePitchSettings';
 import { useTrackAnalysis } from '../hooks/useReferenceTrack';
+import { contourCsv, debugExportBase, encodeWav, saveDebugFile } from '../utils/debugExport';
 import { buildMidiFile, downloadBytes } from '../utils/midi';
 import { collectPitches, segmentNotes } from '../utils/notes';
 import type { DetectionFilter } from '../utils/pitch';
@@ -186,6 +187,41 @@ export default function StudioPage() {
     downloadBytes(buildMidiFile(notes), `${baseName}-take.mid`);
   };
 
+  // Writes the decoded audio, the reference contour and the settings that
+  // produced it to debug-exports/ (dev server), named after the track + time.
+  const [debugExportStatus, setDebugExportStatus] = useState<string | null>(null);
+  const debugExport = async () => {
+    if (!audioBuffer) return;
+    const base = debugExportBase(fileName);
+    setDebugExportStatus('Exporting...');
+    try {
+      const track = reference.track;
+      const info = {
+        file: fileName,
+        exportedAt: new Date().toISOString(),
+        audio: {
+          sampleRate: audioBuffer.sampleRate,
+          channels: audioBuffer.numberOfChannels,
+          duration: audioBuffer.duration,
+        },
+        reference: {
+          method: studio.topVoiceReference ? 'topVoice' : 'pitchy',
+          status: reference.status,
+          gridHz: track?.gridHz ?? null,
+          filter: referenceFilter,
+        },
+        filter,
+        syncOffsetMs: studio.syncOffsetMs,
+      };
+      await saveDebugFile(`${base}.json`, JSON.stringify(info, null, 2), 'application/json');
+      if (track) await saveDebugFile(`${base}.contour.csv`, contourCsv(track), 'text/csv');
+      await saveDebugFile(`${base}.wav`, encodeWav(audioBuffer), 'audio/wav');
+      setDebugExportStatus(`Saved debug-exports/${base}.*`);
+    } catch (err) {
+      setDebugExportStatus(String(err));
+    }
+  };
+
   const exportReference = () => {
     if (!reference.track) return;
     const notes = segmentNotes(collectPitches(reference.track, 0, duration, referenceFilter), {
@@ -302,6 +338,8 @@ export default function StudioPage() {
         onClearTake={clearTake}
         onExportTake={exportTake}
         onExportReference={exportReference}
+        onDebugExport={() => void debugExport()}
+        debugExportStatus={debugExportStatus}
       />
 
 

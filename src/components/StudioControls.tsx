@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
-import { FiCircle, FiDownload, FiTrash2 } from 'react-icons/fi';
+import { FiCircle, FiDownload, FiTool, FiTrash2 } from 'react-icons/fi';
 import type { ReferenceState } from '../hooks/useReferenceTrack';
 
 type Props = {
@@ -23,6 +23,8 @@ type Props = {
   onClearTake: () => void;
   onExportTake: () => void;
   onExportReference: () => void;
+  onDebugExport: () => void;
+  debugExportStatus: string | null;
 };
 
 export function StudioControls({
@@ -46,6 +48,8 @@ export function StudioControls({
   onClearTake,
   onExportTake,
   onExportReference,
+  onDebugExport,
+  debugExportStatus,
 }: Props) {
   const referenceStatus =
     reference.status === 'analyzing'
@@ -83,6 +87,16 @@ export function StudioControls({
         >
           <FiDownload /> Reference MIDI
         </button>
+        <button
+          type="button"
+          className="toggle-button"
+          onClick={onDebugExport}
+          disabled={!hasAudio}
+          title="Save the decoded audio (WAV), reference contour (CSV) and settings (JSON) to debug-exports/ in the project"
+        >
+          <FiTool /> Debug export
+        </button>
+        {debugExportStatus && <span className="studio-hint">{debugExportStatus}</span>}
         {recordTake && !micArmed && <span className="studio-hint">Start the mic to record.</span>}
       </div>
 

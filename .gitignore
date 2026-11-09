@@ -26,3 +26,6 @@ dist-ssr
 TODO.md
 /.cursor/plans
 package-lock.json
+
+# Debug exports written by the dev server (Studio > Debug export)
+debug-exports/
