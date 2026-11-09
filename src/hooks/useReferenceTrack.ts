@@ -40,6 +40,8 @@ function referenceWorkerCount() {
 export function useTrackAnalysis(
   audioBuffer: AudioBuffer | null,
   method: ReferenceRequest['method'] = 'pitchy',
+  /** Top-voice tracker switch cost (see ReferenceRequest.smoothing). */
+  smoothing = 4,
 ): TrackAnalysis {
   const [peaks, setPeaks] = useState<Float32Array | null>(null);
   const [reference, setReference] = useState<ReferenceState>(IDLE);
@@ -65,7 +67,11 @@ export function useTrackAnalysis(
     const runReference = (samples: Float32Array, sampleRate: number) => {
       const duration = samples.length / sampleRate;
       const gridHz = duration > LONG_TRACK_SECONDS ? 50 : 100;
-      const windowSize = 2 ** Math.round(Math.log2(Math.max(256, REFERENCE_WINDOW_SECONDS * sampleRate)));
+      // Top voice uses a window twice as long (~85 ms): neighbouring semitones in
+      // the lower register need the finer frequency resolution to stay apart.
+      const windowSize =
+        2 ** Math.round(Math.log2(Math.max(256, REFERENCE_WINDOW_SECONDS * sampleRate))) *
+        (method === 'topVoice' ? 2 : 1);
       const halfWindow = windowSize / 2;
       const bins = Math.max(1, Math.ceil(duration * gridHz) + 1);
       const frequency = new Float32Array(bins);
@@ -125,6 +131,7 @@ export function useTrackAnalysis(
           binStart,
           binEnd,
           method,
+          smoothing,
         };
         worker.postMessage(request, [slice.buffer]);
       }
@@ -163,7 +170,7 @@ export function useTrackAnalysis(
       cancelled = true;
       stopAll();
     };
-  }, [audioBuffer, method]);
+  }, [audioBuffer, method, smoothing]);
 
   return { peaks, reference };
 }

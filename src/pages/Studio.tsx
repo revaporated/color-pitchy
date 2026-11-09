@@ -67,7 +67,11 @@ export default function StudioPage() {
   // aren't recording; it's cleared on every seek so it only shows this pass.
   const take = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
   const preview = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
-  const { peaks, reference } = useTrackAnalysis(audioBuffer, studio.topVoiceReference ? 'topVoice' : 'pitchy');
+  const { peaks, reference } = useTrackAnalysis(
+    audioBuffer,
+    studio.topVoiceReference ? 'topVoice' : 'pitchy',
+    studio.referenceSmoothing,
+  );
   const referenceFilter: DetectionFilter = useMemo(
     () => ({
       clarityThreshold: studio.referenceClarity,
@@ -206,6 +210,7 @@ export default function StudioPage() {
         },
         reference: {
           method: studio.topVoiceReference ? 'topVoice' : 'pitchy',
+          smoothing: studio.referenceSmoothing,
           status: reference.status,
           gridHz: track?.gridHz ?? null,
           filter: referenceFilter,
@@ -331,6 +336,8 @@ export default function StudioPage() {
         referenceOpacity={studio.referenceOpacity}
         topVoiceReference={studio.topVoiceReference}
         setTopVoiceReference={studio.setTopVoiceReference}
+        referenceSmoothing={studio.referenceSmoothing}
+        setReferenceSmoothing={studio.setReferenceSmoothing}
         setReferenceOpacity={studio.setReferenceOpacity}
         syncOffsetMs={studio.syncOffsetMs}
         setSyncOffsetMs={studio.setSyncOffsetMs}

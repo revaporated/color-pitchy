@@ -352,8 +352,8 @@ export function PitchControls({
         {enabled ? 'Stop mic' : 'Start mic'}
       </button>
 
-      <label>
-        Clarity threshold: {Math.round(clarityThreshold * 100)}%
+      <label className="slider-row">
+        <span className="slider-row__text">Clarity threshold: {Math.round(clarityThreshold * 100)}%</span>
         <input
           type="range"
           min={0}
@@ -364,8 +364,8 @@ export function PitchControls({
         />
       </label>
 
-      <label>
-        FFT size: {FFT_SIZES[fftIndex]}
+      <label className="slider-row">
+        <span className="slider-row__text">FFT size: {FFT_SIZES[fftIndex]}</span>
         <input
           type="range"
           min={0}
@@ -379,8 +379,8 @@ export function PitchControls({
       </label>
 
       {showHistory && (
-      <label>
-        History (seconds): {historyDuration}
+      <label className="slider-row">
+        <span className="slider-row__text">History (seconds): {historyDuration}</span>
         <input
           type="range"
           min={1}
@@ -394,8 +394,8 @@ export function PitchControls({
       </label>
       )}
 
-      <label>
-        Cents threshold: ±{centsThreshold}c
+      <label className="slider-row">
+        <span className="slider-row__text">Cents threshold: ±{centsThreshold}c</span>
         <input
           type="range"
           min={5}
@@ -435,8 +435,8 @@ export function PitchControls({
         Note trails
       </label>
 
-      <label>
-        Trail opacity: {Math.round(trailOpacity * 100)}%
+      <label className="slider-row">
+        <span className="slider-row__text">Trail opacity: {Math.round(trailOpacity * 100)}%</span>
         <input
           type="range"
           min={0.05}
@@ -456,8 +456,8 @@ export function PitchControls({
         Diagnostics
       </label>
 
-      <label>
-        Min detect: {midiToNoteName(minDetectableNote).note}{midiToNoteName(minDetectableNote).octave} ({minDetectableNote})
+      <label className="slider-row">
+        <span className="slider-row__text">Min detect: {midiToNoteName(minDetectableNote).note}{midiToNoteName(minDetectableNote).octave} ({minDetectableNote})</span>
         <input
           type="range"
           min={24}
@@ -472,8 +472,8 @@ export function PitchControls({
         />
       </label>
 
-      <label>
-        Max detect: {midiToNoteName(maxDetectableNote).note}{midiToNoteName(maxDetectableNote).octave} ({maxDetectableNote})
+      <label className="slider-row">
+        <span className="slider-row__text">Max detect: {midiToNoteName(maxDetectableNote).note}{midiToNoteName(maxDetectableNote).octave} ({maxDetectableNote})</span>
         <input
           type="range"
           min={84}

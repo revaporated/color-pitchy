@@ -93,6 +93,7 @@ export function useStudioSettings() {
   const [showReference, setShowReference] = usePersistentState('studio.showReference', true);
   const [referenceClarity, setReferenceClarity] = usePersistentState('studio.referenceClarity', 0.8);
   const [topVoiceReference, setTopVoiceReference] = usePersistentState('studio.topVoiceReference', false);
+  const [referenceSmoothing, setReferenceSmoothing] = usePersistentState('studio.referenceSmoothing', 4);
   const [referenceOpacity, setReferenceOpacity] = usePersistentState('studio.referenceOpacity', 0.16);
   const [syncOffsetMs, setSyncOffsetMs] = usePersistentState('studio.syncOffsetMs', 0);
 
@@ -109,6 +110,8 @@ export function useStudioSettings() {
     setReferenceOpacity,
     topVoiceReference,
     setTopVoiceReference,
+    referenceSmoothing,
+    setReferenceSmoothing,
     syncOffsetMs,
     setSyncOffsetMs,
   };

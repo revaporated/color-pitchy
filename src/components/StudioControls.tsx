@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { FiCircle, FiDownload, FiTool, FiTrash2 } from 'react-icons/fi';
+import { InfoTip } from './InfoTip';
 import type { ReferenceState } from '../hooks/useReferenceTrack';
 
 type Props = {
@@ -16,6 +17,8 @@ type Props = {
   referenceOpacity: number;
   topVoiceReference: boolean;
   setTopVoiceReference: Dispatch<SetStateAction<boolean>>;
+  referenceSmoothing: number;
+  setReferenceSmoothing: Dispatch<SetStateAction<number>>;
   setReferenceOpacity: Dispatch<SetStateAction<number>>;
   syncOffsetMs: number;
   setSyncOffsetMs: Dispatch<SetStateAction<number>>;
@@ -42,6 +45,8 @@ export function StudioControls({
   setReferenceOpacity,
   topVoiceReference,
   setTopVoiceReference,
+  referenceSmoothing,
+  setReferenceSmoothing,
   syncOffsetMs,
   setSyncOffsetMs,
   reference,
@@ -128,8 +133,27 @@ export function StudioControls({
         Top-voice reference (for chords and piano)
       </label>
 
-      <label>
-        Reference clarity: {Math.round(referenceClarity * 100)}%
+      {topVoiceReference && (
+        <label className="slider-row">
+          <span className="slider-row__text">Reference smoothing: {referenceSmoothing === 0 ? 'off' : referenceSmoothing}</span>
+          <input
+            type="range"
+            min={0}
+            max={10}
+            step={1}
+            value={referenceSmoothing}
+            onChange={(event) => setReferenceSmoothing(parseInt(event.target.value, 10))}
+          />
+          <InfoTip>
+            How reluctant the tracker is to change notes. Higher removes flicker and blips but can
+            merge very fast notes. Re-analyzes the track. The tracker decides when a note is
+            sounding, so Reference clarity has no effect while smoothing is on.
+          </InfoTip>
+        </label>
+      )}
+
+      <label className="slider-row">
+        <span className="slider-row__text">Reference clarity: {Math.round(referenceClarity * 100)}%</span>
         <input
           type="range"
           min={0.3}
@@ -140,8 +164,8 @@ export function StudioControls({
         />
       </label>
 
-      <label>
-        Reference opacity: {Math.round(referenceOpacity * 100)}%
+      <label className="slider-row">
+        <span className="slider-row__text">Reference opacity: {Math.round(referenceOpacity * 100)}%</span>
         <input
           type="range"
           min={0.05}
@@ -152,8 +176,8 @@ export function StudioControls({
         />
       </label>
 
-      <label>
-        Sync offset: {syncOffsetMs} ms
+      <label className="slider-row">
+        <span className="slider-row__text">Sync offset: {syncOffsetMs} ms</span>
         <input
           type="range"
           min={-200}
@@ -162,10 +186,10 @@ export function StudioControls({
           value={syncOffsetMs}
           onChange={(event) => setSyncOffsetMs(parseInt(event.target.value, 10))}
         />
-        <span className="studio-hint">
+        <InfoTip>
           Shifts your take earlier to cancel mic and speaker latency. Sing along with a clear part
           of the track and adjust until your line sits on the reference.
-        </span>
+        </InfoTip>
       </label>
     </div>
   );

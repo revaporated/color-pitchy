@@ -15,6 +15,12 @@ export type ReferenceRequest = {
   binEnd: number;
   /** 'pitchy': one pitch per window. 'topVoice': harmonic salience, highest strong note (for polyphony). */
   method: 'pitchy' | 'topVoice';
+  /**
+   * topVoice only: cost of switching notes in the tracker (0 = no tracking,
+   * pick each frame independently). Higher values remove more flicker and
+   * blips but can merge very fast notes.
+   */
+  smoothing: number;
 };
 
 export type ReferenceResponse =
@@ -37,8 +43,12 @@ scope.onmessage = (event) => {
 };
 
 /** One window centered on each grid bin. */
-function analyze({ samples, sampleOffset, sampleRate, gridHz, windowSize, binStart, binEnd, method }: ReferenceRequest) {
-  const topVoice = method === 'topVoice' ? new TopVoice(windowSize * 2, sampleRate) : null;
+function analyze(request: ReferenceRequest) {
+  if (request.method === 'topVoice') {
+    analyzeTopVoice(request);
+    return;
+  }
+  const { samples, sampleOffset, sampleRate, gridHz, windowSize, binStart, binEnd } = request;
   const detector = PitchDetector.forFloat32Array(windowSize);
   detector.minVolumeDecibels = -50; // treat near-silence as unvoiced
   const window = new Float32Array(windowSize);
@@ -62,7 +72,7 @@ function analyze({ samples, sampleOffset, sampleRate, gridHz, windowSize, binSta
       }
     }
 
-    const [f, c] = topVoice ? topVoice.find(window) : detector.findPitch(window, sampleRate);
+    const [f, c] = detector.findPitch(window, sampleRate);
     frequency[i] = Number.isFinite(f) && f > 0 ? f : 0;
     clarity[i] = Number.isFinite(c) ? c : 0;
 
@@ -76,20 +86,124 @@ const MIN_MIDI = 48; // C3
 const MAX_MIDI = 96; // C7
 const HARMONICS = 8;
 
+const NOTE_COUNT = MAX_MIDI - MIN_MIDI + 1;
+/** Tracker emission for a frame with sound but the "no note" state chosen. */
+const NO_NOTE_SCORE = Math.log(0.15);
+/** Score for a note that isn't a candidate in this frame. */
+const NON_CANDIDATE_SCORE = Math.log(1e-3);
+/** Candidates below the top one are scored down by this, so the top voice wins unless it's unstable. */
+const LOWER_VOICE_WEIGHT = 0.5;
+
 /**
- * Polyphonic melody guess without ML: score every semitone by the energy at
- * its harmonics (harmonic summation), then take the HIGHEST note that is a
- * local peak and at least half as strong as the strongest one, since the
- * melody is usually the top voice. A note is skipped if the note an octave
- * below scores higher, which is the usual octave-error signature.
+ * Polyphonic melody guess without ML, in two passes over this worker's slice.
+ *
+ * 1. Salience: every semitone C3-C7 is scored by the energy at its harmonics
+ *    (harmonic summation). Candidates are local peaks at least half as strong
+ *    as the strongest, skipping any note whose octave-below scores higher (the
+ *    usual octave-error signature). The highest candidate is the top voice.
+ * 2. Tracking (Viterbi): picks the note sequence that best follows the
+ *    candidates while paying `smoothing` for every note change. That removes
+ *    one-frame flips between neighbouring notes and brief in-between blips.
+ *    With smoothing 0 each frame just takes its top voice.
  */
-class TopVoice {
+function analyzeTopVoice({ samples, sampleOffset, sampleRate, gridHz, windowSize, binStart, binEnd, smoothing }: ReferenceRequest) {
+  const salience = new Salience(windowSize * 2, sampleRate);
+  const window = new Float32Array(windowSize);
+  const halfWindow = windowSize / 2;
+  const bins = Math.max(0, binEnd - binStart);
+  // Per frame: one score per note, or NaN in the first slot for silence.
+  const scores = new Float32Array(bins * NOTE_COUNT);
+
+  for (let i = 0; i < bins; i += 1) {
+    const start = Math.round(((binStart + i) / gridHz) * sampleRate) - halfWindow - sampleOffset;
+    for (let j = 0; j < windowSize; j += 1) {
+      const index = start + j;
+      window[j] = index >= 0 && index < samples.length ? samples[index] : 0;
+    }
+    salience.candidates(window, scores.subarray(i * NOTE_COUNT, (i + 1) * NOTE_COUNT));
+    if (i % 500 === 0) scope.postMessage({ type: 'progress', progress: (0.95 * i) / bins });
+  }
+
+  const path = smoothing > 0 ? viterbi(scores, bins, smoothing) : topEachFrame(scores, bins);
+  const frequency = new Float32Array(bins);
+  const clarity = new Float32Array(bins);
+  for (let i = 0; i < bins; i += 1) {
+    const m = path[i];
+    if (m < 0) continue;
+    frequency[i] = 440 * 2 ** ((m - 69) / 12);
+    // The tracker decides voicing, so a tracked note is fully "clear". With
+    // smoothing off, report the note's strength relative to the frame's best.
+    clarity[i] = smoothing > 0 ? 1 : Math.exp(scores[i * NOTE_COUNT + m - MIN_MIDI]);
+  }
+  scope.postMessage({ type: 'result', frequency, clarity }, [frequency.buffer, clarity.buffer]);
+}
+
+/** Per-frame top voice, no tracking. Returns MIDI per frame or -1. */
+function topEachFrame(scores: Float32Array, bins: number) {
+  const path = new Int16Array(bins).fill(-1);
+  for (let i = 0; i < bins; i += 1) {
+    const base = i * NOTE_COUNT;
+    if (Number.isNaN(scores[base])) continue;
+    // Candidates are found top-down, so the highest-pitched one is the top voice.
+    for (let k = NOTE_COUNT - 1; k >= 0; k -= 1) {
+      if (scores[base + k] > NON_CANDIDATE_SCORE) {
+        path[i] = MIN_MIDI + k;
+        break;
+      }
+    }
+  }
+  return path;
+}
+
+/**
+ * Best path through states [no note, C3 .. C7]. Staying costs nothing,
+ * changing to any other state costs `switchCost`. Returns MIDI per frame or -1.
+ */
+function viterbi(scores: Float32Array, bins: number, switchCost: number) {
+  const states = NOTE_COUNT + 1;
+  let total = new Float64Array(states);
+  let next = new Float64Array(states);
+  const back = new Uint8Array(bins * states);
+
+  for (let i = 0; i < bins; i += 1) {
+    const base = i * NOTE_COUNT;
+    const silent = Number.isNaN(scores[base]);
+    let best = 0;
+    for (let k = 1; k < states; k += 1) if (total[k] > total[best]) best = k;
+    const switched = total[best] - switchCost;
+    for (let k = 0; k < states; k += 1) {
+      const emit = k === 0 ? (silent ? 0 : NO_NOTE_SCORE) : silent ? NON_CANDIDATE_SCORE : scores[base + k - 1];
+      if (total[k] >= switched) {
+        next[k] = total[k] + emit;
+        back[i * states + k] = k;
+      } else {
+        next[k] = switched + emit;
+        back[i * states + k] = best;
+      }
+    }
+    const swap = total;
+    total = next;
+    next = swap;
+  }
+
+  let k = 0;
+  for (let s = 1; s < states; s += 1) if (total[s] > total[k]) k = s;
+  const path = new Int16Array(bins);
+  for (let i = bins - 1; i >= 0; i -= 1) {
+    path[i] = k === 0 ? -1 : MIN_MIDI + k - 1;
+    k = back[i * states + k];
+  }
+  return path;
+}
+
+/** Harmonic-summation salience for one window, written as log scores per note. */
+class Salience {
   private readonly size: number;
   private readonly re: Float64Array;
   private readonly im: Float64Array;
   private readonly hann: Float64Array;
   private readonly mag: Float64Array;
-  private readonly salience = new Float64Array(MAX_MIDI + 1);
+  private readonly raw = new Float64Array(MAX_MIDI + 2);
   private readonly sampleRate: number;
 
   constructor(size: number, sampleRate: number) {
@@ -102,20 +216,31 @@ class TopVoice {
     for (let i = 0; i < size / 2; i += 1) this.hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (size / 2 - 1));
   }
 
-  find(window: Float32Array): [number, number] {
+  /**
+   * Fills `out` (one slot per note, MIN_MIDI first) with log scores: the
+   * top candidate gets log(strength), lower candidates log(strength * 0.5),
+   * everything else a floor value. Silence sets out[0] to NaN.
+   */
+  candidates(window: Float32Array, out: Float32Array) {
     const n = this.size;
     const half = n / 2;
     let energy = 0;
     for (let i = 0; i < n; i += 1) {
       // Hann-windowed input, zero-padded 2x for finer frequency bins.
-      this.re[i] = i < half ? window[i] * this.hann[i] : 0;
+      const x = i < half ? window[i] : 0;
+      this.re[i] = i < half ? x * this.hann[i] : 0;
       this.im[i] = 0;
-      energy += i < half ? window[i] * window[i] : 0;
+      energy += x * x;
     }
-    if (Math.sqrt(energy / half) < 0.003) return [0, 0]; // silence
+    out.fill(NON_CANDIDATE_SCORE);
+    if (Math.sqrt(energy / half) < 0.003) {
+      out[0] = Number.NaN;
+      return;
+    }
     fft(this.re, this.im);
     for (let k = 0; k < half; k += 1) this.mag[k] = Math.sqrt(Math.hypot(this.re[k], this.im[k])); // compressed
 
+    const s = this.raw;
     const binHz = this.sampleRate / n;
     let max = 0;
     for (let m = MIN_MIDI; m <= MAX_MIDI; m += 1) {
@@ -126,18 +251,22 @@ class TopVoice {
         if (k + 1 >= half) break;
         sum += 0.8 ** (h - 1) * Math.max(this.mag[k - 1], this.mag[k], this.mag[k + 1]);
       }
-      this.salience[m] = sum;
+      s[m] = sum;
       if (sum > max) max = sum;
     }
-    if (max <= 0) return [0, 0];
-
-    for (let m = MAX_MIDI - 1; m > MIN_MIDI; m -= 1) {
-      const s = this.salience[m];
-      if (s < 0.5 * max || s < this.salience[m - 1] || s < this.salience[m + 1]) continue;
-      if (m - 12 >= MIN_MIDI && this.salience[m - 12] > s) continue;
-      return [440 * 2 ** ((m - 69) / 12), s / max];
+    if (max <= 0) {
+      out[0] = Number.NaN;
+      return;
     }
-    return [0, 0];
+
+    let top = true;
+    for (let m = MAX_MIDI - 1; m > MIN_MIDI; m -= 1) {
+      const v = s[m];
+      if (v < 0.5 * max || v < s[m - 1] || v < s[m + 1]) continue;
+      if (m - 12 >= MIN_MIDI && s[m - 12] > v) continue;
+      out[m - MIN_MIDI] = Math.log((v / max) * (top ? 1 : LOWER_VOICE_WEIGHT));
+      top = false;
+    }
   }
 }
 
