@@ -18,6 +18,11 @@ export type ProjectSettings = {
   referenceOpacity: number;
   topVoiceReference: boolean;
   referenceSmoothing: number;
+  /** Analysis window in ms, 0 = automatic. */
+  referenceWindowMs: number;
+  /** Note range the reference analysis reports (MIDI). */
+  referenceMinMidi: number;
+  referenceMaxMidi: number;
 };
 
 export type ProjectMeta = {
@@ -61,7 +66,15 @@ const BUILTIN_SETTINGS: ProjectSettings = {
   referenceOpacity: 0.16,
   topVoiceReference: false,
   referenceSmoothing: 4,
+  referenceWindowMs: 0,
+  referenceMinMidi: 48,
+  referenceMaxMidi: 96,
 };
+
+/** Projects saved before a setting existed get its built-in default. */
+function withSettingDefaults(project: ProjectMeta): ProjectMeta {
+  return { ...project, settings: { ...BUILTIN_SETTINGS, ...project.settings } };
+}
 
 /**
  * Settings for a new project: whatever was last used in Studio (kept in
@@ -204,13 +217,14 @@ export async function listProjects(): Promise<ProjectMeta[]> {
   const projects = await transact(['projects'], 'readonly', (tx) =>
     asPromise(tx.objectStore('projects').getAll() as IDBRequest<ProjectMeta[]>),
   );
-  return projects.sort((a, b) => b.updatedAt - a.updatedAt);
+  return projects.map(withSettingDefaults).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export function getProject(id: string): Promise<ProjectMeta | undefined> {
-  return transact(['projects'], 'readonly', (tx) =>
+export async function getProject(id: string): Promise<ProjectMeta | undefined> {
+  const project = await transact(['projects'], 'readonly', (tx) =>
     asPromise(tx.objectStore('projects').get(id) as IDBRequest<ProjectMeta | undefined>),
   );
+  return project ? withSettingDefaults(project) : undefined;
 }
 
 export async function updateProject(id: string, patch: Partial<Omit<ProjectMeta, 'id'>>) {

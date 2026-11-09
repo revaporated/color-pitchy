@@ -1,7 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
-import { FiCircle, FiDownload, FiRefreshCw, FiTool, FiTrash2 } from 'react-icons/fi';
+import { FiCircle, FiDownload, FiTool, FiTrash2 } from 'react-icons/fi';
 import { InfoTip } from './InfoTip';
-import type { ReferenceState } from '../hooks/useReferenceTrack';
 
 type Props = {
   hasAudio: boolean;
@@ -15,10 +14,6 @@ type Props = {
   referenceClarity: number;
   setReferenceClarity: Dispatch<SetStateAction<number>>;
   referenceOpacity: number;
-  topVoiceReference: boolean;
-  setTopVoiceReference: Dispatch<SetStateAction<boolean>>;
-  referenceSmoothing: number;
-  setReferenceSmoothing: Dispatch<SetStateAction<number>>;
   setReferenceOpacity: Dispatch<SetStateAction<number>>;
   syncOffsetMs: number;
   setSyncOffsetMs: Dispatch<SetStateAction<number>>;
@@ -28,15 +23,14 @@ type Props = {
   setReferenceVolume: Dispatch<SetStateAction<number>>;
   trackVolume: number;
   setTrackVolume: Dispatch<SetStateAction<number>>;
-  /** Notes in the reference after filtering, or null before analysis. */
-  referenceNoteCount: number | null;
-  reference: ReferenceState;
+
   onClearTake: () => void;
   onExportTake: () => void;
   onExportReference: () => void;
   onDebugExport: () => void;
-  onReanalyze: () => void;
   debugExportStatus: string | null;
+  /** Whether there are reference notes to export. */
+  referenceReady: boolean;
 };
 
 export function StudioControls({
@@ -52,10 +46,6 @@ export function StudioControls({
   setReferenceClarity,
   referenceOpacity,
   setReferenceOpacity,
-  topVoiceReference,
-  setTopVoiceReference,
-  referenceSmoothing,
-  setReferenceSmoothing,
   syncOffsetMs,
   setSyncOffsetMs,
   playReference,
@@ -64,24 +54,14 @@ export function StudioControls({
   setReferenceVolume,
   trackVolume,
   setTrackVolume,
-  referenceNoteCount,
-  reference,
+
   onClearTake,
   onExportTake,
   onExportReference,
   onDebugExport,
-  onReanalyze,
   debugExportStatus,
+  referenceReady,
 }: Props) {
-  const referenceStatus =
-    reference.status === 'analyzing'
-      ? `Analyzing track... ${Math.round(reference.progress * 100)}%`
-      : reference.status === 'ready'
-        ? `Reference ready (${referenceNoteCount ?? 0} notes)`
-        : reference.status === 'error'
-          ? `Reference analysis failed: ${reference.message}`
-          : 'Load a track to analyze its pitch';
-
   return (
     <div className="card controls studio-controls">
       <div className="studio-controls__row">
@@ -105,7 +85,7 @@ export function StudioControls({
           type="button"
           className="toggle-button"
           onClick={onExportReference}
-          disabled={reference.status !== 'ready'}
+          disabled={!referenceReady}
         >
           <FiDownload /> Reference MIDI
         </button>
@@ -137,21 +117,7 @@ export function StudioControls({
           checked={showReference}
           onChange={(event) => setShowReference(event.target.checked)}
         />
-        Show reference contour
-        <span className="studio-hint">{referenceStatus}</span>
-        {(reference.status === 'ready' || reference.status === 'error') && (
-          <button
-            type="button"
-            className="link-button"
-            onClick={(event) => {
-              event.preventDefault();
-              onReanalyze();
-            }}
-            title="Discard the cached contour for this track and analyze it again"
-          >
-            <FiRefreshCw /> Re-analyze
-          </button>
-        )}
+        Show reference
       </label>
 
       <label className="checkbox">
@@ -192,34 +158,6 @@ export function StudioControls({
           onChange={(event) => setTrackVolume(parseFloat(event.target.value))}
         />
       </label>
-
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={topVoiceReference}
-          onChange={(event) => setTopVoiceReference(event.target.checked)}
-        />
-        Top-voice reference (for chords and piano)
-      </label>
-
-      {topVoiceReference && (
-        <label className="slider-row">
-          <span className="slider-row__text">Reference smoothing: {referenceSmoothing === 0 ? 'off' : referenceSmoothing}</span>
-          <input
-            type="range"
-            min={0}
-            max={10}
-            step={1}
-            value={referenceSmoothing}
-            onChange={(event) => setReferenceSmoothing(parseInt(event.target.value, 10))}
-          />
-          <InfoTip>
-            How reluctant the tracker is to change notes. Higher removes flicker and blips but can
-            merge very fast notes. Re-analyzes the track. The tracker decides when a note is
-            sounding, so Reference clarity has no effect while smoothing is on.
-          </InfoTip>
-        </label>
-      )}
 
       <label className="slider-row">
         <span className="slider-row__text">Reference clarity: {Math.round(referenceClarity * 100)}%</span>

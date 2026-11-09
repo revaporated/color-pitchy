@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { ProjectSettings } from '../storage/projects';
+import type { AnalysisSettings } from './useReferenceTrack';
 import type { DetectionFilter } from '../utils/pitch';
 
 const PREFIX = 'color-pitchy:';
@@ -102,13 +103,28 @@ export function useStudioSettings(initial: ProjectSettings) {
 
   const [showReference, setShowReference] = useState(initial.showReference);
   const [referenceClarity, setReferenceClarity] = useState(initial.referenceClarity);
-  const [topVoiceReference, setTopVoiceReference] = useState(initial.topVoiceReference);
-  const [referenceSmoothing, setReferenceSmoothing] = useState(initial.referenceSmoothing);
   const [referenceOpacity, setReferenceOpacity] = useState(initial.referenceOpacity);
+  // Applied analysis settings. The panel edits a draft and applies it with Analyze.
+  const [analysis, setAnalysis] = useState<AnalysisSettings>(() => ({
+    method: initial.topVoiceReference ? 'topVoice' : 'pitchy',
+    smoothing: initial.referenceSmoothing,
+    windowMs: initial.referenceWindowMs,
+    minMidi: initial.referenceMinMidi,
+    maxMidi: initial.referenceMaxMidi,
+  }));
 
   const projectSettings: ProjectSettings = useMemo(
-    () => ({ showReference, referenceClarity, topVoiceReference, referenceSmoothing, referenceOpacity }),
-    [showReference, referenceClarity, topVoiceReference, referenceSmoothing, referenceOpacity],
+    () => ({
+      showReference,
+      referenceClarity,
+      referenceOpacity,
+      topVoiceReference: analysis.method === 'topVoice',
+      referenceSmoothing: analysis.smoothing,
+      referenceWindowMs: analysis.windowMs,
+      referenceMinMidi: analysis.minMidi,
+      referenceMaxMidi: analysis.maxMidi,
+    }),
+    [showReference, referenceClarity, referenceOpacity, analysis],
   );
 
   return {
@@ -123,10 +139,8 @@ export function useStudioSettings(initial: ProjectSettings) {
     setReferenceClarity,
     referenceOpacity,
     setReferenceOpacity,
-    topVoiceReference,
-    setTopVoiceReference,
-    referenceSmoothing,
-    setReferenceSmoothing,
+    analysis,
+    setAnalysis,
     syncOffsetMs,
     setSyncOffsetMs,
     playReference,

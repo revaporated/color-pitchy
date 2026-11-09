@@ -14,16 +14,58 @@ const MAX_REFERENCE_WORKERS = 4;
  * Bump whenever the reference analysis changes (worker code, window sizes,
  * grid), so contours cached in the library are recomputed instead of reused.
  */
-export const REFERENCE_CACHE_VERSION = 1;
+export const REFERENCE_CACHE_VERSION = 2;
+
+/** Everything that changes the reference analysis. Edited as a draft and applied with Analyze. */
+export type AnalysisSettings = {
+  method: ReferenceRequest['method'];
+  /** Top-voice tracker switch cost (see ReferenceRequest.smoothing). */
+  smoothing: number;
+  /** Analysis window in milliseconds, or 0 for automatic (~46 ms pitchy, ~93 ms top voice). */
+  windowMs: number;
+  minMidi: number;
+  maxMidi: number;
+};
+
+export const DEFAULT_ANALYSIS: AnalysisSettings = {
+  method: 'pitchy',
+  smoothing: 4,
+  windowMs: 0,
+  minMidi: 48, // C3
+  maxMidi: 96, // C7
+};
+
+export function sameAnalysis(a: AnalysisSettings, b: AnalysisSettings) {
+  return (
+    a.method === b.method &&
+    (a.method !== 'topVoice' || a.smoothing === b.smoothing) &&
+    a.windowMs === b.windowMs &&
+    a.minMidi === b.minMidi &&
+    a.maxMidi === b.maxMidi
+  );
+}
 
 /** Cache key for a reference contour. Smoothing only affects the top-voice tracker. */
-export function referenceCacheKey(audioId: string, method: ReferenceRequest['method'], smoothing: number) {
+export function referenceCacheKey(audioId: string, settings: AnalysisSettings) {
+  const { method, smoothing, windowMs, minMidi, maxMidi } = settings;
   const variant = method === 'topVoice' ? `topVoice:${smoothing}` : method;
-  return `${audioId}|${variant}|v${REFERENCE_CACHE_VERSION}`;
+  return `${audioId}|${variant}|w${windowMs}|${minMidi}-${maxMidi}|v${REFERENCE_CACHE_VERSION}`;
+}
+
+/** Samples in the analysis window: a power of two near the requested length. */
+export function analysisWindowSize(settings: AnalysisSettings, sampleRate: number) {
+  const seconds =
+    settings.windowMs > 0
+      ? settings.windowMs / 1000
+      : // Top voice defaults to twice as long (~93 ms): neighbouring semitones in
+        // the lower register need the finer frequency resolution to stay apart.
+        REFERENCE_WINDOW_SECONDS * (settings.method === 'topVoice' ? 2 : 1);
+  return 2 ** Math.round(Math.log2(Math.max(256, seconds * sampleRate)));
 }
 
 export type ReferenceState =
-  | { status: 'idle'; track: null; progress: 0 }
+  /** No track, or (`needsAnalysis`) a track with nothing cached for these settings yet. */
+  | { status: 'idle'; track: null; progress: 0; needsAnalysis?: boolean }
   | { status: 'analyzing'; track: null; progress: number }
   | { status: 'ready'; track: PitchTrack; progress: 1 }
   | { status: 'error'; track: null; progress: 0; message: string };
@@ -51,17 +93,20 @@ function referenceWorkerCount() {
  */
 export function useTrackAnalysis(
   audioBuffer: AudioBuffer | null,
-  method: ReferenceRequest['method'] = 'pitchy',
-  /** Top-voice tracker switch cost (see ReferenceRequest.smoothing). */
-  smoothing = 4,
+  settings: AnalysisSettings,
   /**
    * Library id of the audio. When set, the contour is read from and written to
    * the library's cache, so reopening a project skips the analysis.
    */
   audioId: string | null = null,
-  /** Change to re-run the analysis (clear the cache first to force a recompute). */
-  refreshToken = 0,
+  /**
+   * 0: only show a cached contour; with nothing cached, wait (status idle,
+   * needsAnalysis). Any higher value allows computing, and changing it re-runs
+   * the analysis (clear the cache first to force a recompute).
+   */
+  runToken = 0,
 ): TrackAnalysis {
+  const { method, smoothing, windowMs, minMidi, maxMidi } = settings;
   const [peaks, setPeaks] = useState<Float32Array | null>(null);
   const [reference, setReference] = useState<ReferenceState>(IDLE);
 
@@ -71,7 +116,11 @@ export function useTrackAnalysis(
       setReference(IDLE);
       return;
     }
-    setReference({ status: 'analyzing', track: null, progress: 0 });
+    setReference(
+      runToken > 0
+        ? { status: 'analyzing', track: null, progress: 0 }
+        : IDLE, // until the cache answers
+    );
 
     let cancelled = false;
     const workers: Worker[] = [];
@@ -83,7 +132,8 @@ export function useTrackAnalysis(
       setReference({ status: 'error', track: null, progress: 0, message });
     };
 
-    const cacheKey = audioId ? referenceCacheKey(audioId, method, smoothing) : null;
+    const analysis: AnalysisSettings = { method, smoothing, windowMs, minMidi, maxMidi };
+    const cacheKey = audioId ? referenceCacheKey(audioId, analysis) : null;
     const cached: Promise<PitchTrack | null> = cacheKey
       ? getReference(cacheKey)
           .then((record) =>
@@ -97,13 +147,10 @@ export function useTrackAnalysis(
     });
 
     const runReference = (samples: Float32Array, sampleRate: number) => {
+      setReference({ status: 'analyzing', track: null, progress: 0 });
       const duration = samples.length / sampleRate;
       const gridHz = duration > LONG_TRACK_SECONDS ? 50 : 100;
-      // Top voice uses a window twice as long (~85 ms): neighbouring semitones in
-      // the lower register need the finer frequency resolution to stay apart.
-      const windowSize =
-        2 ** Math.round(Math.log2(Math.max(256, REFERENCE_WINDOW_SECONDS * sampleRate))) *
-        (method === 'topVoice' ? 2 : 1);
+      const windowSize = analysisWindowSize(analysis, sampleRate);
       const halfWindow = windowSize / 2;
       const bins = Math.max(1, Math.ceil(duration * gridHz) + 1);
       const frequency = new Float32Array(bins);
@@ -169,6 +216,8 @@ export function useTrackAnalysis(
           binEnd,
           method,
           smoothing,
+          minMidi,
+          maxMidi,
         };
         worker.postMessage(request, [slice.buffer]);
       }
@@ -185,7 +234,9 @@ export function useTrackAnalysis(
         prep.terminate();
         const { samples, sampleRate } = message;
         void cached.then((track) => {
-          if (!cancelled && !track) runReference(samples, sampleRate);
+          if (cancelled || track) return;
+          if (runToken > 0) runReference(samples, sampleRate);
+          else setReference({ status: 'idle', track: null, progress: 0, needsAnalysis: true });
         });
       } else {
         fail(message.message);
@@ -210,7 +261,7 @@ export function useTrackAnalysis(
       cancelled = true;
       stopAll();
     };
-  }, [audioBuffer, method, smoothing, audioId, refreshToken]);
+  }, [audioBuffer, method, smoothing, windowMs, minMidi, maxMidi, audioId, runToken]);
 
   return { peaks, reference };
 }

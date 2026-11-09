@@ -6,6 +6,7 @@ import { NoteSet } from '../audio/noteSet';
 import { ReferencePlayer } from '../audio/referencePlayer';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import { PlaybackClock } from '../audio/playbackClock';
+import { AnalysisPanel } from '../components/AnalysisPanel';
 import { AudioUpload } from '../components/AudioUpload';
 import { NavBar } from '../components/NavBar';
 import { PitchControls } from '../components/PitchControls';
@@ -18,7 +19,7 @@ import { useAudioSource } from '../hooks/useAudioFile';
 import { useAudioPlayback } from '../hooks/useAudioPlayback';
 import { usePitchEngine } from '../hooks/usePitchEngine';
 import { usePitchSettings, useStudioSettings } from '../hooks/usePitchSettings';
-import { useTrackAnalysis } from '../hooks/useReferenceTrack';
+import { sameAnalysis, useTrackAnalysis, type AnalysisSettings } from '../hooks/useReferenceTrack';
 import {
   clearReferences,
   getAudio,
@@ -219,17 +220,18 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     };
   }, [take, projectId]);
   const preview = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
-  const [analysisToken, setAnalysisToken] = useState(0);
-  const { peaks, reference } = useTrackAnalysis(
-    audioBuffer,
-    studio.topVoiceReference ? 'topVoice' : 'pitchy',
-    studio.referenceSmoothing,
-    audio?.id ?? null,
-    analysisToken,
-  );
-  const reanalyze = async () => {
-    if (audio) await clearReferences(audio.id).catch(() => undefined);
-    setAnalysisToken((value) => value + 1);
+  // 0: only show a saved analysis. Analyze bumps it, which lets the analysis run.
+  const [runToken, setRunToken] = useState(0);
+  const { analysis, setAnalysis } = studio;
+  const { peaks, reference } = useTrackAnalysis(audioBuffer, analysis, audio?.id ?? null, runToken);
+  const analyze = async (next: AnalysisSettings) => {
+    if (sameAnalysis(next, analysis)) {
+      // Same settings: throw the saved result away and run again.
+      if (audio) await clearReferences(audio.id).catch(() => undefined);
+    } else {
+      setAnalysis(next);
+    }
+    setRunToken((value) => value + 1);
   };
   const [referencePlayer] = useState(() => new ReferencePlayer(clock));
   useEffect(() => () => referencePlayer.dispose(), [referencePlayer]);
@@ -248,7 +250,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   // The reference as notes: what the graph draws, the player plays and the
   // MIDI export writes. A tracked top-voice contour is already smooth, so it
   // skips the median filter and keeps shorter notes.
-  const trackedReference = studio.topVoiceReference && studio.referenceSmoothing > 0;
+  const trackedReference = analysis.method === 'topVoice' && analysis.smoothing > 0;
   const referenceNotes = useMemo(
     () =>
       reference.track
@@ -335,6 +337,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
       try {
         const { audio: added } = await setProjectAudio(projectId, file);
         setStoredTake(null);
+        setRunToken(0); // a new track waits for Analyze, so its settings can be chosen first
         setAudio(added);
       } catch (err) {
         setUploadError(`Couldn't save the track: ${String(err)}`);
@@ -412,8 +415,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
           duration: audioBuffer.duration,
         },
         reference: {
-          method: studio.topVoiceReference ? 'topVoice' : 'pitchy',
-          smoothing: studio.referenceSmoothing,
+          ...analysis,
           status: reference.status,
           gridHz: track?.gridHz ?? null,
           filter: referenceFilter,
@@ -522,6 +524,14 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         onFileChange={(event) => void handleUpload(event)}
       />
 
+      <AnalysisPanel
+        hasAudio={hasAudio}
+        applied={analysis}
+        reference={reference}
+        noteCount={referenceNotes?.count ?? null}
+        onAnalyze={(next) => void analyze(next)}
+      />
+
       <StudioControls
         hasAudio={hasAudio}
         micArmed={armed}
@@ -534,10 +544,6 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         referenceClarity={studio.referenceClarity}
         setReferenceClarity={studio.setReferenceClarity}
         referenceOpacity={studio.referenceOpacity}
-        topVoiceReference={studio.topVoiceReference}
-        setTopVoiceReference={studio.setTopVoiceReference}
-        referenceSmoothing={studio.referenceSmoothing}
-        setReferenceSmoothing={studio.setReferenceSmoothing}
         setReferenceOpacity={studio.setReferenceOpacity}
         syncOffsetMs={studio.syncOffsetMs}
         setSyncOffsetMs={studio.setSyncOffsetMs}
@@ -547,13 +553,12 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         setReferenceVolume={studio.setReferenceVolume}
         trackVolume={studio.trackVolume}
         setTrackVolume={studio.setTrackVolume}
-        referenceNoteCount={referenceNotes?.count ?? null}
-        reference={reference}
+
+        referenceReady={reference.status === 'ready'}
         onClearTake={clearTake}
         onExportTake={exportTake}
         onExportReference={exportReference}
         onDebugExport={() => void debugExport()}
-        onReanalyze={() => void reanalyze()}
         debugExportStatus={debugExportStatus}
       />
 

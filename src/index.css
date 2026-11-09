@@ -865,3 +865,38 @@ button:disabled {
 .library__storage {
   margin: 0;
 }
+
+/* Reference analysis panel */
+.analysis-panel__header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.analysis-panel__choices {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.analysis-panel__select {
+  justify-self: start;
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+}
+
+.toggle-button.is-primary {
+  border-color: #f97316;
+}
+
+.analysis-panel .slider-row {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+}

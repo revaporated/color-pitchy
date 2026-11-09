@@ -21,6 +21,9 @@ export type ReferenceRequest = {
    * blips but can merge very fast notes.
    */
   smoothing: number;
+  /** Lowest and highest MIDI note to report. topVoice only searches this range. */
+  minMidi: number;
+  maxMidi: number;
 };
 
 export type ReferenceResponse =
@@ -49,6 +52,9 @@ function analyze(request: ReferenceRequest) {
     return;
   }
   const { samples, sampleOffset, sampleRate, gridHz, windowSize, binStart, binEnd } = request;
+  // Allow a quarter tone either side so notes at the edges of the range survive rounding.
+  const minHz = 440 * 2 ** ((request.minMidi - 0.5 - 69) / 12);
+  const maxHz = 440 * 2 ** ((request.maxMidi + 0.5 - 69) / 12);
   const detector = PitchDetector.forFloat32Array(windowSize);
   detector.minVolumeDecibels = -50; // treat near-silence as unvoiced
   const window = new Float32Array(windowSize);
@@ -73,8 +79,9 @@ function analyze(request: ReferenceRequest) {
     }
 
     const [f, c] = detector.findPitch(window, sampleRate);
-    frequency[i] = Number.isFinite(f) && f > 0 ? f : 0;
-    clarity[i] = Number.isFinite(c) ? c : 0;
+    const inRange = Number.isFinite(f) && f >= minHz && f <= maxHz;
+    frequency[i] = inRange ? f : 0;
+    clarity[i] = inRange && Number.isFinite(c) ? c : 0;
 
     if (i % 500 === 0) scope.postMessage({ type: 'progress', progress: i / bins });
   }
@@ -82,11 +89,8 @@ function analyze(request: ReferenceRequest) {
   scope.postMessage({ type: 'result', frequency, clarity }, [frequency.buffer, clarity.buffer]);
 }
 
-const MIN_MIDI = 48; // C3
-const MAX_MIDI = 96; // C7
 const HARMONICS = 8;
 
-const NOTE_COUNT = MAX_MIDI - MIN_MIDI + 1;
 /** Tracker emission for a frame with sound but the "no note" state chosen. */
 const NO_NOTE_SCORE = Math.log(0.15);
 /** Score for a note that isn't a candidate in this frame. */
@@ -106,8 +110,21 @@ const LOWER_VOICE_WEIGHT = 0.5;
  *    one-frame flips between neighbouring notes and brief in-between blips.
  *    With smoothing 0 each frame just takes its top voice.
  */
-function analyzeTopVoice({ samples, sampleOffset, sampleRate, gridHz, windowSize, binStart, binEnd, smoothing }: ReferenceRequest) {
-  const salience = new Salience(windowSize * 2, sampleRate);
+function analyzeTopVoice({
+  samples,
+  sampleOffset,
+  sampleRate,
+  gridHz,
+  windowSize,
+  binStart,
+  binEnd,
+  smoothing,
+  minMidi,
+  maxMidi,
+}: ReferenceRequest) {
+  const range: NoteRange = { min: minMidi, count: maxMidi - minMidi + 1 };
+  const NOTE_COUNT = range.count;
+  const salience = new Salience(windowSize * 2, sampleRate, range);
   const window = new Float32Array(windowSize);
   const halfWindow = windowSize / 2;
   const bins = Math.max(0, binEnd - binStart);
@@ -124,7 +141,7 @@ function analyzeTopVoice({ samples, sampleOffset, sampleRate, gridHz, windowSize
     if (i % 500 === 0) scope.postMessage({ type: 'progress', progress: (0.95 * i) / bins });
   }
 
-  const path = smoothing > 0 ? viterbi(scores, bins, smoothing) : topEachFrame(scores, bins);
+  const path = smoothing > 0 ? viterbi(scores, bins, smoothing, range) : topEachFrame(scores, bins, range);
   const frequency = new Float32Array(bins);
   const clarity = new Float32Array(bins);
   for (let i = 0; i < bins; i += 1) {
@@ -133,13 +150,16 @@ function analyzeTopVoice({ samples, sampleOffset, sampleRate, gridHz, windowSize
     frequency[i] = 440 * 2 ** ((m - 69) / 12);
     // The tracker decides voicing, so a tracked note is fully "clear". With
     // smoothing off, report the note's strength relative to the frame's best.
-    clarity[i] = smoothing > 0 ? 1 : Math.exp(scores[i * NOTE_COUNT + m - MIN_MIDI]);
+    clarity[i] = smoothing > 0 ? 1 : Math.exp(scores[i * NOTE_COUNT + m - minMidi]);
   }
   scope.postMessage({ type: 'result', frequency, clarity }, [frequency.buffer, clarity.buffer]);
 }
 
+/** The notes the top-voice analysis searches: MIDI `min` up to `min + count - 1`. */
+type NoteRange = { min: number; count: number };
+
 /** Per-frame top voice, no tracking. Returns MIDI per frame or -1. */
-function topEachFrame(scores: Float32Array, bins: number) {
+function topEachFrame(scores: Float32Array, bins: number, { min: MIN_MIDI, count: NOTE_COUNT }: NoteRange) {
   const path = new Int16Array(bins).fill(-1);
   for (let i = 0; i < bins; i += 1) {
     const base = i * NOTE_COUNT;
@@ -159,7 +179,7 @@ function topEachFrame(scores: Float32Array, bins: number) {
  * Best path through states [no note, C3 .. C7]. Staying costs nothing,
  * changing to any other state costs `switchCost`. Returns MIDI per frame or -1.
  */
-function viterbi(scores: Float32Array, bins: number, switchCost: number) {
+function viterbi(scores: Float32Array, bins: number, switchCost: number, { min: MIN_MIDI, count: NOTE_COUNT }: NoteRange) {
   const states = NOTE_COUNT + 1;
   let total = new Float64Array(states);
   let next = new Float64Array(states);
@@ -203,12 +223,18 @@ class Salience {
   private readonly im: Float64Array;
   private readonly hann: Float64Array;
   private readonly mag: Float64Array;
-  private readonly raw = new Float64Array(MAX_MIDI + 2);
+  private readonly raw: Float64Array;
   private readonly sampleRate: number;
+  private readonly minMidi: number;
+  private readonly maxMidi: number;
 
-  constructor(size: number, sampleRate: number) {
+  constructor(size: number, sampleRate: number, range: NoteRange) {
     this.size = size;
     this.sampleRate = sampleRate;
+    this.minMidi = range.min;
+    this.maxMidi = range.min + range.count - 1;
+    // One extra note scored past each end, so the end notes can be tested as peaks.
+    this.raw = new Float64Array(this.maxMidi + 2);
     this.re = new Float64Array(size);
     this.im = new Float64Array(size);
     this.mag = new Float64Array(size / 2);
@@ -241,9 +267,11 @@ class Salience {
     for (let k = 0; k < half; k += 1) this.mag[k] = Math.sqrt(Math.hypot(this.re[k], this.im[k])); // compressed
 
     const s = this.raw;
+    const MIN_MIDI = this.minMidi;
+    const MAX_MIDI = this.maxMidi;
     const binHz = this.sampleRate / n;
     let max = 0;
-    for (let m = MIN_MIDI; m <= MAX_MIDI; m += 1) {
+    for (let m = MIN_MIDI - 1; m <= MAX_MIDI + 1; m += 1) {
       const f0 = 440 * 2 ** ((m - 69) / 12);
       let sum = 0;
       for (let h = 1; h <= HARMONICS; h += 1) {
@@ -252,7 +280,7 @@ class Salience {
         sum += 0.8 ** (h - 1) * Math.max(this.mag[k - 1], this.mag[k], this.mag[k + 1]);
       }
       s[m] = sum;
-      if (sum > max) max = sum;
+      if (sum > max && m >= MIN_MIDI && m <= MAX_MIDI) max = sum;
     }
     if (max <= 0) {
       out[0] = Number.NaN;
@@ -260,7 +288,7 @@ class Salience {
     }
 
     let top = true;
-    for (let m = MAX_MIDI - 1; m > MIN_MIDI; m -= 1) {
+    for (let m = MAX_MIDI; m >= MIN_MIDI; m -= 1) {
       const v = s[m];
       if (v < 0.5 * max || v < s[m - 1] || v < s[m + 1]) continue;
       if (m - 12 >= MIN_MIDI && s[m - 12] > v) continue;
