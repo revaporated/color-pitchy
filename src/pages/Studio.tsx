@@ -2,6 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PitchTrack } from '../audio/frames';
+import {
+  addNote,
+  applyEdits,
+  deleteNote,
+  EMPTY_EDITS,
+  hasEdits,
+  updateNote,
+  type NoteEdits,
+} from '../audio/noteEdits';
 import { NoteSet } from '../audio/noteSet';
 import { ReferencePlayer } from '../audio/referencePlayer';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
@@ -10,7 +19,9 @@ import { AnalysisPanel } from '../components/AnalysisPanel';
 import { AudioUpload } from '../components/AudioUpload';
 import { NavBar } from '../components/NavBar';
 import { PitchControls } from '../components/PitchControls';
-import { PitchGraph } from '../components/PitchGraph';
+import { PitchGraph, type PenGesture, type PenOptions } from '../components/PitchGraph';
+import { PenToolbar } from '../components/PenToolbar';
+import { useNoteEdits } from '../hooks/useNoteEdits';
 import { EngineStats } from '../components/EngineStats';
 import { PlaybackControls } from '../components/PlaybackControls';
 import { StudioControls } from '../components/StudioControls';
@@ -251,7 +262,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   // MIDI export writes. A tracked top-voice contour is already smooth, so it
   // skips the median filter and keeps shorter notes.
   const trackedReference = analysis.method === 'topVoice' && analysis.smoothing > 0;
-  const referenceNotes = useMemo(
+  const autoNotes = useMemo(
     () =>
       reference.track
         ? NoteSet.fromContour(reference.track, duration, referenceFilter, {
@@ -261,7 +272,104 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         : null,
     [reference.track, duration, referenceFilter, trackedReference],
   );
+
+  // Pen mode: your edits sit on top of the analysis (see noteEdits.ts), so
+  // re-analyzing replaces the auto notes but keeps what you changed by hand.
+  const noteEdits = useNoteEdits(projectId);
+  const { preview: previewEdit, commit: commitEdit, cancel: cancelEdit, apply: applyEdit } = noteEdits;
+  const { undo: undoEdit, redo: redoEdit, reset: resetEdits, edits: currentEdits } = noteEdits;
+  const [penMode, setPenMode] = useState(false);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const referenceNotes = useMemo(() => applyEdits(autoNotes, currentEdits), [autoNotes, currentEdits]);
   useEffect(() => referencePlayer.setNotes(referenceNotes), [referencePlayer, referenceNotes]);
+
+  const pen: PenOptions | null = useMemo(() => {
+    if (!penMode || !noteEdits.loaded || !hasAudio) return null;
+    const run = (gesture: PenGesture) => (edits: NoteEdits) =>
+      gesture.kind === 'create'
+        ? addNote(edits, gesture.span, gesture.id)
+        : updateNote(edits, gesture.note, gesture.span, gesture.newId);
+    return {
+      selectedId: selectedNoteId,
+      onSelect: setSelectedNoteId,
+      onGesture: (gesture, phase) => {
+        if (phase === 'cancel') {
+          cancelEdit();
+          return;
+        }
+        previewEdit(run(gesture));
+        if (phase === 'commit') commitEdit();
+        setSelectedNoteId(
+          gesture.kind === 'create'
+            ? gesture.id
+            : gesture.note.origin === 'manual'
+              ? gesture.note.id
+              : gesture.newId,
+        );
+      },
+      onDelete: (note) => {
+        applyEdit((edits) => deleteNote(edits, note));
+        setSelectedNoteId(null);
+      },
+      onAudition: (midi) => referencePlayer.audition(midi),
+    };
+  }, [
+    penMode,
+    noteEdits.loaded,
+    hasAudio,
+    selectedNoteId,
+    previewEdit,
+    commitEdit,
+    cancelEdit,
+    applyEdit,
+    referencePlayer,
+  ]);
+
+  const clearEdits = () => {
+    if (!window.confirm('Remove all your note edits? (You can undo this.)')) return;
+    applyEdit(() => EMPTY_EDITS);
+    setSelectedNoteId(null);
+  };
+
+  // Shortcuts: P toggles pen mode, Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y
+  // redo, Delete/Backspace removes the selected note, Escape deselects.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, select, textarea, [contenteditable="true"]')) return;
+      const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (mod && key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) redoEdit();
+        else undoEdit();
+        return;
+      }
+      if (mod && key === 'y') {
+        event.preventDefault();
+        redoEdit();
+        return;
+      }
+      if (mod || event.altKey) return;
+      if (key === 'p' && hasAudio) {
+        setPenMode((value) => !value);
+        return;
+      }
+      if (!penMode) return;
+      if ((key === 'delete' || key === 'backspace') && selectedNoteId) {
+        const note = referenceNotes?.findById(selectedNoteId);
+        if (note) {
+          event.preventDefault();
+          applyEdit((edits) => deleteNote(edits, note));
+          setSelectedNoteId(null);
+        }
+      } else if (key === 'escape') {
+        setSelectedNoteId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [hasAudio, penMode, selectedNoteId, referenceNotes, applyEdit, undoEdit, redoEdit]);
   useEffect(() => {
     referencePlayer.setEnabled(studio.playReference && hasAudio);
     return () => referencePlayer.setEnabled(false);
@@ -325,7 +433,11 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         setUploadError('Please choose an MP3 file.');
         return;
       }
-      if (take.hasData() && !window.confirm("Replacing the track deletes this project's take. Continue?")) {
+      const losing = [take.hasData() && 'take', hasEdits(currentEdits) && 'note edits'].filter(Boolean);
+      if (
+        losing.length > 0 &&
+        !window.confirm(`Replacing the track deletes this project's ${losing.join(' and ')}. Continue?`)
+      ) {
         return;
       }
       setUploadError(null);
@@ -338,12 +450,14 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         const { audio: added } = await setProjectAudio(projectId, file);
         setStoredTake(null);
         setRunToken(0); // a new track waits for Analyze, so its settings can be chosen first
+        resetEdits();
+        setSelectedNoteId(null);
         setAudio(added);
       } catch (err) {
         setUploadError(`Couldn't save the track: ${String(err)}`);
       }
     },
-    [projectId, setError, stop, take],
+    [projectId, setError, stop, take, currentEdits, resetEdits],
   );
 
   const handleSelectionChange = useCallback((next: Selection | null) => {
@@ -449,6 +563,17 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
       {micError && <div className="error">{micError}</div>}
 
       <div className="card waveform-card">
+        <PenToolbar
+          enabled={hasAudio && noteEdits.loaded}
+          penMode={penMode}
+          onTogglePen={() => setPenMode((value) => !value)}
+          canUndo={noteEdits.canUndo}
+          canRedo={noteEdits.canRedo}
+          onUndo={undoEdit}
+          onRedo={redoEdit}
+          editCount={currentEdits.added.length + currentEdits.removed.length}
+          onClearEdits={clearEdits}
+        />
         <PitchGraph
           className="studio-graph"
           mode={{
@@ -459,7 +584,8 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
             take,
             preview: studio.recordTake ? null : preview,
             previewSeconds: controls.historyDuration,
-            reference: studio.showReference ? referenceNotes : null,
+            reference: studio.showReference || pen ? referenceNotes : null,
+            pen,
             referenceOpacity: studio.referenceOpacity,
             playheadXRef,
             showLiveMarker: armed && detectionActive,

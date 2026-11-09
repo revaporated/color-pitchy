@@ -971,3 +971,17 @@ button:disabled {
   align-items: center;
   gap: 8px 24px;
 }
+
+/* Pen mode toolbar above the pitch graph */
+.pen-toolbar {
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.pen-toolbar__help {
+  display: inline-flex;
+}
+
+.pitch-graph {
+  touch-action: pan-y;
+}

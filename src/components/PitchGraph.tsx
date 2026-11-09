@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import type { MouseEvent, RefObject } from 'react';
+import type { MouseEvent, PointerEvent, RefObject } from 'react';
 import type { FrameSource } from '../audio/frames';
-import type { NoteSet } from '../audio/noteSet';
+import { MIN_NOTE_SECONDS, newManualId, type NoteSpan } from '../audio/noteEdits';
+import type { NoteSet, RefNote } from '../audio/noteSet';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import type { PitchEngine } from '../audio/pitchEngine';
 import type { PlaybackClock } from '../audio/playbackClock';
@@ -42,6 +43,48 @@ export type TimelineGraphMode = {
   playheadXRef?: RefObject<number | null>;
   /** Draw the current mic pitch at the playhead. */
   showLiveMarker: boolean;
+  /** Pen mode: edit the reference notes with the mouse. Null when off. */
+  pen?: PenOptions | null;
+};
+
+/**
+ * A pen gesture on a reference note. `create` draws a new note; `edit` moves
+ * or trims an existing one. For an auto note, `newId` is the id its edited
+ * copy gets (see updateNote).
+ */
+export type PenGesture =
+  | { kind: 'create'; id: string; span: NoteSpan }
+  | { kind: 'edit'; note: RefNote; newId: string; span: NoteSpan };
+
+export type PenOptions = {
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  /** `preview` while dragging, then `commit` on release or `cancel` (Escape). */
+  onGesture: (gesture: PenGesture, phase: 'preview' | 'commit' | 'cancel') => void;
+  onDelete: (note: RefNote) => void;
+  /** Play a short tone so you hear a pitch as you place it. */
+  onAudition?: (midi: number) => void;
+};
+
+/** Length of a note made by a single click (no drag). */
+const CLICK_NOTE_SECONDS = 0.25;
+/** Pointer this close (px) to a note's end grabs the end for trimming. */
+const EDGE_PX = 6;
+/** Movement (px) before a press counts as a drag. */
+const DRAG_PX = 3;
+
+type PenDrag = {
+  pointerId: number;
+  kind: 'create' | 'move' | 'trim-start' | 'trim-end';
+  note: RefNote | null;
+  newId: string;
+  downX: number;
+  downY: number;
+  downTime: number;
+  downMidi: number;
+  moved: boolean;
+  lastMidi: number;
+  last: PenGesture | null;
 };
 
 type Props = {
@@ -344,7 +387,22 @@ export function PitchGraph(props: Props) {
         }
       } else {
         if (reference) {
-          drawNotes(ctx, reference, t0, t1, xScale, xOffset, lo, hi, h, width, mode.referenceOpacity);
+          const pen = mode.pen ?? null;
+          drawNotes(
+            ctx,
+            reference,
+            t0,
+            t1,
+            xScale,
+            xOffset,
+            lo,
+            hi,
+            h,
+            width,
+            // In pen mode the notes are what you're working on, so keep them visible.
+            pen ? Math.max(mode.referenceOpacity, 0.35) : mode.referenceOpacity,
+            pen?.selectedId ?? null,
+          );
         }
         const hasPreview = previewSource !== null && previewT1 > previewT0;
         if (p.showNoteTrails) {
@@ -401,16 +459,183 @@ export function PitchGraph(props: Props) {
     return onAnimationFrame(draw, FRAME_ORDER.graph);
   }, []);
 
+  const penDrag = useRef<PenDrag | null>(null);
+
+  /** Song time, semitone and pixel position under the pointer (timeline only). */
+  const locate = (event: { clientX: number; clientY: number }) => {
+    const { mode, filter } = propsRef.current;
+    const canvas = canvasRef.current;
+    if (mode.kind !== 'timeline' || !canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const scrollLeft = mode.viewportRef.current?.scrollLeft ?? 0;
+    const lo = filter.minMidi;
+    const hi = Math.max(filter.maxMidi, lo + 1);
+    const h = sizeRef.current.height;
+    return {
+      x,
+      y,
+      time: Math.max(0, (scrollLeft + x) / mode.pixelsPerSecond),
+      midi: Math.round(hi - (y / h) * (hi - lo)),
+      toX: (time: number) => time * mode.pixelsPerSecond - scrollLeft,
+      slack: 3 / mode.pixelsPerSecond,
+    };
+  };
+
+  const penOptions = () => {
+    const { mode } = propsRef.current;
+    return mode.kind === 'timeline' && mode.pen ? { pen: mode.pen, notes: mode.reference } : null;
+  };
+
+  /** What a press here would do: which note, and which part of it. */
+  const penTarget = (spot: NonNullable<ReturnType<typeof locate>>) => {
+    const notes = penOptions()?.notes;
+    const note = notes?.noteAt(spot.time, spot.midi, spot.slack) ?? null;
+    if (!note) return { note: null, kind: 'create' as const };
+    const startX = spot.toX(note.start);
+    const endX = spot.toX(note.end);
+    const wide = endX - startX >= EDGE_PX * 3;
+    if (Math.abs(spot.x - endX) <= EDGE_PX && spot.x >= startX + 2) return { note, kind: 'trim-end' as const };
+    if (wide && Math.abs(spot.x - startX) <= EDGE_PX) return { note, kind: 'trim-start' as const };
+    return { note, kind: 'move' as const };
+  };
+
+  const gestureFor = (drag: PenDrag, spot: NonNullable<ReturnType<typeof locate>>, pitchOnly: boolean): PenGesture => {
+    if (drag.kind === 'create' || !drag.note) {
+      const end = drag.moved ? spot.time : drag.downTime + CLICK_NOTE_SECONDS;
+      return {
+        kind: 'create',
+        id: drag.newId,
+        span: { midi: drag.downMidi, start: Math.min(drag.downTime, end), end: Math.max(drag.downTime, end) },
+      };
+    }
+    const note = drag.note;
+    let span: NoteSpan;
+    if (drag.kind === 'move') {
+      const dt = pitchOnly ? 0 : Math.max(-note.start, spot.time - drag.downTime);
+      span = { midi: note.midi + spot.midi - drag.downMidi, start: note.start + dt, end: note.end + dt };
+    } else if (drag.kind === 'trim-start') {
+      span = { midi: note.midi, start: Math.min(spot.time, note.end - MIN_NOTE_SECONDS), end: note.end };
+    } else {
+      span = { midi: note.midi, start: note.start, end: Math.max(spot.time, note.start + MIN_NOTE_SECONDS) };
+    }
+    return { kind: 'edit', note, newId: drag.newId, span };
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    const options = penOptions();
+    if (!options || event.button !== 0) return;
+    const spot = locate(event);
+    if (!spot) return;
+    event.preventDefault();
+    const target = penTarget(spot);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    penDrag.current = {
+      pointerId: event.pointerId,
+      kind: target.kind,
+      note: target.note,
+      newId: target.note?.origin === 'manual' ? target.note.id : newManualId(),
+      downX: spot.x,
+      downY: spot.y,
+      downTime: spot.time,
+      downMidi: spot.midi,
+      moved: false,
+      lastMidi: target.note?.midi ?? spot.midi,
+      last: null,
+    };
+    options.pen.onSelect(target.note?.id ?? null);
+    options.pen.onAudition?.(target.note?.midi ?? spot.midi);
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const options = penOptions();
+    const spot = options ? locate(event) : null;
+    if (!options || !spot) {
+      event.currentTarget.style.cursor = '';
+      return;
+    }
+    const drag = penDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      // Hover: show what a press would do.
+      const kind = penTarget(spot).kind;
+      event.currentTarget.style.cursor =
+        kind === 'create' ? 'crosshair' : kind === 'move' ? 'grab' : 'ew-resize';
+      return;
+    }
+    if (!drag.moved && Math.hypot(spot.x - drag.downX, spot.y - drag.downY) < DRAG_PX) return;
+    drag.moved = true;
+    const gesture = gestureFor(drag, spot, event.shiftKey);
+    drag.last = gesture;
+    options.pen.onGesture(gesture, 'preview');
+    if (gesture.span.midi !== drag.lastMidi) {
+      drag.lastMidi = gesture.span.midi;
+      options.pen.onAudition?.(gesture.span.midi);
+    }
+  };
+
+  const finishDrag = (event: PointerEvent<HTMLDivElement>, cancelled: boolean) => {
+    const drag = penDrag.current;
+    const options = penOptions();
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    penDrag.current = null;
+    if (!options) return;
+    if (cancelled) {
+      if (drag.last) options.pen.onGesture(drag.last, 'cancel');
+      return;
+    }
+    const spot = locate(event);
+    if (drag.kind === 'create' && spot) {
+      // A click (no drag) makes a note of default length.
+      options.pen.onGesture(gestureFor(drag, spot, event.shiftKey), 'commit');
+      return;
+    }
+    if (drag.moved && spot) options.pen.onGesture(gestureFor(drag, spot, event.shiftKey), 'commit');
+  };
+
+  // Escape cancels a drag in progress.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !penDrag.current) return;
+      const drag = penDrag.current;
+      penDrag.current = null;
+      const options = penOptions();
+      if (options && drag.last) options.pen.onGesture(drag.last, 'cancel');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    const options = penOptions();
+    const spot = options ? locate(event) : null;
+    if (!options || !spot) return;
+    event.preventDefault();
+    const note = options.notes?.noteAt(spot.time, spot.midi, spot.slack);
+    if (note) options.pen.onDelete(note);
+  };
+
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     const { mode, onSeek } = propsRef.current;
-    if (mode.kind !== 'timeline' || !onSeek) return;
+    if (mode.kind !== 'timeline' || !onSeek || mode.pen) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const scrollLeft = mode.viewportRef.current?.scrollLeft ?? 0;
     onSeek(Math.max(0, (scrollLeft + event.clientX - rect.left) / mode.pixelsPerSecond));
   };
 
   return (
-    <div className={`pitch-graph${className ? ` ${className}` : ''}`} onClick={handleClick}>
+    <div
+      className={`pitch-graph${className ? ` ${className}` : ''}`}
+      onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={(event) => finishDrag(event, false)}
+      onPointerCancel={(event) => finishDrag(event, true)}
+      onPointerLeave={(event) => {
+        if (!penDrag.current) event.currentTarget.style.cursor = '';
+      }}
+      onContextMenu={handleContextMenu}
+    >
       <canvas ref={canvasRef} />
     </div>
   );
@@ -621,24 +846,42 @@ function drawNotes(
   h: number,
   width: number,
   alpha: number,
+  selectedId: string | null = null,
 ) {
   if (notes.count === 0) return;
   ctx.save();
-  ctx.globalAlpha = alpha;
-  let currentFill = -1;
+  // Hand-edited notes are drawn stronger and outlined so you can tell them apart.
+  const manualAlpha = Math.min(1, Math.max(alpha * 2, 0.6));
+  let selected: { x: number; y: number; w: number; h: number } | null = null;
   notes.forEachOverlapping(t0 - 2 / xScale, t1, (note) => {
     const left = Math.max(0, xScale * note.start + xOffset);
     const right = Math.min(width, xScale * note.end + xOffset);
     if (right <= 0 || left >= width) return;
     const top = mapMidiToY(note.midi + 0.5, h, lo, hi);
     const bottom = mapMidiToY(note.midi - 0.5, h, lo, hi);
-    const fill = ((note.midi % 12) + 12) % 12;
-    if (fill !== currentFill) {
-      ctx.fillStyle = NOTE_FILL[fill];
-      currentFill = fill;
+    const x = left;
+    const y = Math.min(top, bottom);
+    const w = Math.max(2, right - left);
+    const barHeight = Math.abs(bottom - top);
+    const manual = note.origin === 'manual';
+    ctx.globalAlpha = manual ? manualAlpha : alpha;
+    ctx.fillStyle = NOTE_FILL[((note.midi % 12) + 12) % 12];
+    ctx.fillRect(x, y, w, barHeight);
+    if (manual) {
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = TAKE_LINE;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, barHeight - 1));
     }
-    ctx.fillRect(left, Math.min(top, bottom), Math.max(2, right - left), Math.abs(bottom - top));
+    if (note.id === selectedId) selected = { x, y, w, h: barHeight };
   });
+  if (selected) {
+    const box = selected as { x: number; y: number; w: number; h: number };
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(box.x - 1, box.y - 1, box.w + 2, box.h + 2);
+  }
   ctx.restore();
 }
 

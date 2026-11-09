@@ -10,6 +10,11 @@ export type NoteOrigin = 'auto' | 'manual';
  * set of them can hold chords or several voices.
  */
 export type RefNote = NoteEvent & {
+  /**
+   * Stable within a set. Manual notes keep theirs across re-analysis; an auto
+   * note's id is derived from its pitch and start, so it changes if they do.
+   */
+  id: string;
   /** 0 = top voice. Lower voices count up from there. */
   voice: number;
   origin: NoteOrigin;
@@ -54,7 +59,14 @@ export class NoteSet {
     { medianWindow = 5, minDuration = 0.08 }: ContourNoteOptions = {},
   ) {
     const events = segmentNotes(collectPitches(source, 0, duration, filter), { medianWindow, minDuration });
-    return new NoteSet(events.map((event) => ({ ...event, voice: 0, origin: 'auto' as const })));
+    return new NoteSet(
+      events.map((event) => ({
+        ...event,
+        id: `a:${event.midi}:${event.start.toFixed(3)}`,
+        voice: 0,
+        origin: 'auto' as const,
+      })),
+    );
   }
 
   get count() {
@@ -81,6 +93,30 @@ export class NoteSet {
       if (note.start > t1) break;
       if (note.end >= t0) visit(note);
     }
+  }
+
+  /**
+   * The note drawn at (time, midi), if any. Manual notes win over auto ones,
+   * then the latest start. `slack` widens short notes so they stay clickable.
+   */
+  noteAt(time: number, midi: number, slack = 0) {
+    let best: RefNote | null = null;
+    this.forEachOverlapping(time - slack, time + slack, (note) => {
+      if (note.midi !== midi) return;
+      if (time < note.start - slack || time > note.end + slack) return;
+      if (
+        !best ||
+        (note.origin === 'manual' && best.origin !== 'manual') ||
+        (note.origin === best.origin && note.start >= best.start)
+      ) {
+        best = note;
+      }
+    });
+    return best as RefNote | null;
+  }
+
+  findById(id: string) {
+    return this.notes.find((note) => note.id === id) ?? null;
   }
 
   /** Index of the first note starting at or after `time`. */

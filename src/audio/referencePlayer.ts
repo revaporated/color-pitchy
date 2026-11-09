@@ -65,6 +65,16 @@ export class ReferencePlayer {
     }
   }
 
+  /** Plays one short note right away (pen mode feedback), whether or not playback is on. */
+  audition(midi: number, seconds = 0.25) {
+    this.ensureContext();
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (ctx.state === 'suspended') void ctx.resume();
+    const now = ctx.currentTime;
+    this.play({ id: 'audition', midi, start: 0, end: seconds, voice: 0, origin: 'manual' }, now, now + seconds);
+  }
+
   dispose() {
     this.setEnabled(false);
     void this.ctx?.close().catch(() => undefined);
@@ -112,7 +122,8 @@ export class ReferencePlayer {
     if (!ctx || !this.enabled) return;
 
     if (!clock.isPlaying || !this.notes) {
-      if (this.scheduledUntil !== null || this.voices.size > 0) this.restart();
+      // Only on the transition out of playback, so pen-mode auditions aren't cut off.
+      if (this.scheduledUntil !== null) this.restart();
       return;
     }
     if (ctx.state === 'suspended') void ctx.resume();

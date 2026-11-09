@@ -6,10 +6,13 @@
  * - audio:      the uploaded files, shared by every project that uses them
  * - takes:      the recorded take of each project
  * - references: cached reference contours, per audio file and analysis settings
+ * - edits:      your hand edits to the reference notes (pen mode), per project
  */
 
+import type { NoteEdits } from '../audio/noteEdits';
+
 const DB_NAME = 'color-pitchy';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const LEGACY_PREFIX = 'color-pitchy:studio.';
 
 export type ProjectSettings = {
@@ -120,12 +123,21 @@ function openDb(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('takes')) db.createObjectStore('takes', { keyPath: 'projectId' });
+        if (!db.objectStoreNames.contains('edits')) db.createObjectStore('edits', { keyPath: 'projectId' });
         if (!db.objectStoreNames.contains('references')) {
           const store = db.createObjectStore('references', { keyPath: 'key' });
           store.createIndex('audioId', 'audioId');
         }
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const db = request.result;
+        // Another tab is upgrading the schema: let it, and reopen on next use.
+        db.onversionchange = () => {
+          db.close();
+          dbPromise = null;
+        };
+        resolve(db);
+      };
       request.onerror = () => {
         dbPromise = null;
         reject(request.error ?? new Error('Unable to open the library database.'));
@@ -135,7 +147,9 @@ function openDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-type StoreName = 'projects' | 'audio' | 'takes' | 'references';
+type StoreName = 'projects' | 'audio' | 'takes' | 'references' | 'edits';
+
+export type EditsRecord = NoteEdits & { projectId: string };
 
 function asPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -290,6 +304,7 @@ export async function duplicateProject(id: string): Promise<ProjectMeta | undefi
   const source = await getProject(id);
   if (!source) return undefined;
   const take = await getTake(id);
+  const edits = await getEdits(id);
   const now = Date.now();
   const copy: ProjectMeta = {
     ...source,
@@ -299,9 +314,10 @@ export async function duplicateProject(id: string): Promise<ProjectMeta | undefi
     updatedAt: now,
     settings: { ...source.settings },
   };
-  await transact(['projects', 'takes'], 'readwrite', (tx) => {
+  await transact(['projects', 'takes', 'edits'], 'readwrite', (tx) => {
     tx.objectStore('projects').put(copy);
     if (take) tx.objectStore('takes').put({ ...take, projectId: copy.id });
+    if (edits) tx.objectStore('edits').put({ ...edits, projectId: copy.id });
   });
   return copy;
 }
@@ -320,20 +336,22 @@ async function deleteAudioIfUnused(audioId: string) {
 
 export async function deleteProject(id: string) {
   const project = await getProject(id);
-  await transact(['projects', 'takes'], 'readwrite', (tx) => {
+  await transact(['projects', 'takes', 'edits'], 'readwrite', (tx) => {
     tx.objectStore('projects').delete(id);
     tx.objectStore('takes').delete(id);
+    tx.objectStore('edits').delete(id);
   });
   if (project?.audioId) await deleteAudioIfUnused(project.audioId);
 }
 
-/** Replaces a project's track. The old take no longer lines up, so it is deleted. */
+/** Replaces a project's track. The old take and note edits no longer line up, so they are deleted. */
 export async function setProjectAudio(id: string, file: File) {
   const previous = await getProject(id);
   const audio = await addAudio(file);
   const duration = await probeDuration(file);
-  await transact(['takes'], 'readwrite', (tx) => {
+  await transact(['takes', 'edits'], 'readwrite', (tx) => {
     tx.objectStore('takes').delete(id);
+    tx.objectStore('edits').delete(id);
   });
   const project = await updateProject(id, {
     audioId: audio.id,
@@ -402,5 +420,27 @@ export async function clearReferences(audioId: string) {
   await transact(['references'], 'readwrite', async (tx) => {
     const keys = await asPromise(tx.objectStore('references').index('audioId').getAllKeys(audioId));
     for (const key of keys) tx.objectStore('references').delete(key);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Note edits
+
+export async function getEdits(projectId: string): Promise<NoteEdits | undefined> {
+  const record = await transact(['edits'], 'readonly', (tx) =>
+    asPromise(tx.objectStore('edits').get(projectId) as IDBRequest<EditsRecord | undefined>),
+  );
+  return record ? { added: record.added, removed: record.removed } : undefined;
+}
+
+/** Saves a project's note edits, or deletes them when there are none. */
+export async function saveEdits(projectId: string, edits: NoteEdits) {
+  await transact(['edits'], 'readwrite', (tx) => {
+    if (edits.added.length > 0 || edits.removed.length > 0) {
+      const record: EditsRecord = { projectId, added: [...edits.added], removed: [...edits.removed] };
+      tx.objectStore('edits').put(record);
+    } else {
+      tx.objectStore('edits').delete(projectId);
+    }
   });
 }
