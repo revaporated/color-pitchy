@@ -38,6 +38,12 @@ type Props = {
   /** Hide the History control (Studio's graph follows the song timeline instead). */
   showHistory?: boolean;
   isFullscreen?: boolean;
+  /** Show the Start/Stop mic button (Studio and Live put it in their toolbars). */
+  showMicButton?: boolean;
+  /** Show the drawing options (Studio puts them in its View popover). */
+  showDisplay?: boolean;
+  /** Render as a section inside a Panel instead of its own card. */
+  bare?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 };
@@ -71,6 +77,9 @@ export function PitchControls({
   setMaxDetectableNote,
   showHistory = true,
   isFullscreen = false,
+  showMicButton = true,
+  showDisplay = true,
+  bare = false,
   collapsed = false,
   onToggleCollapsed,
 }: Props) {
@@ -348,10 +357,16 @@ export function PitchControls({
   }
 
   return (
-    <div className="card controls">
-      <button onClick={() => setEnabled((value) => !value)}>
-        {enabled ? 'Stop mic' : 'Start mic'}
-      </button>
+    <div className={bare ? 'panel__section' : 'card controls'}>
+      {showMicButton && (
+        <button
+          type="button"
+          className={enabled ? undefined : 'btn-primary'}
+          onClick={() => setEnabled((value) => !value)}
+        >
+          {enabled ? 'Stop mic' : 'Start mic'}
+        </button>
+      )}
 
       <div className="stepper-group">
         <Stepper
@@ -393,53 +408,49 @@ export function PitchControls({
         />
       </label>
 
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={colorizeMarker}
-          onChange={(event) => setColorizeMarker(event.target.checked)}
-        />
-        Color marker
-      </label>
+      {showDisplay && (
+        <>
+          <div className="checkbox-group">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={colorizeMarker}
+                onChange={(event) => setColorizeMarker(event.target.checked)}
+              />
+              Color marker
+            </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={showNoteLines}
+                onChange={(event) => setShowNoteLines(event.target.checked)}
+              />
+              Semitone lines
+            </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={showNoteTrails}
+                onChange={(event) => setShowNoteTrails(event.target.checked)}
+              />
+              Note trails
+            </label>
+          </div>
 
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={showNoteLines}
-          onChange={(event) => setShowNoteLines(event.target.checked)}
-        />
-        Note lines
-      </label>
-
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={showNoteTrails}
-          onChange={(event) => setShowNoteTrails(event.target.checked)}
-        />
-        Note trails
-      </label>
-
-      <label className="slider-row">
-        <span className="slider-row__text">Trail opacity: {Math.round(trailOpacity * 100)}%</span>
-        <input
-          type="range"
-          min={0.05}
-          max={1}
-          step={0.01}
-          value={trailOpacity}
-          onChange={(event) => setTrailOpacity(parseFloat(event.target.value))}
-        />
-      </label>
-
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={showDiagnostics}
-          onChange={(event) => setShowDiagnostics(event.target.checked)}
-        />
-        Diagnostics
-      </label>
+          <label className="slider-row">
+            <span className="slider-row__text">Trail opacity: {Math.round(trailOpacity * 100)}%</span>
+            <input
+              type="range"
+              min={0.05}
+              max={1}
+              step={0.01}
+              value={trailOpacity}
+              disabled={!showNoteTrails}
+              onChange={(event) => setTrailOpacity(parseFloat(event.target.value))}
+            />
+          </label>
+        </>
+      )}
 
       <label className="slider-row">
         <span className="slider-row__text">Min detect: {midiToNoteName(minDetectableNote).note}{midiToNoteName(minDetectableNote).octave} ({minDetectableNote})</span>
@@ -471,6 +482,15 @@ export function PitchControls({
             if (val < minDetectableNote) setMinDetectableNote(val);
           }}
         />
+      </label>
+
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={showDiagnostics}
+          onChange={(event) => setShowDiagnostics(event.target.checked)}
+        />
+        Diagnostics (frame rate and detection rate on the graph)
       </label>
     </div>
   );

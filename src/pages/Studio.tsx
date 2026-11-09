@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
+import {
+  FiCommand,
+  FiDownload,
+  FiEdit2,
+  FiMoreHorizontal,
+  FiPlay,
+  FiTool,
+  FiTrash2,
+  FiUpload,
+  FiXCircle,
+} from 'react-icons/fi';
 import { Link, useParams } from 'react-router-dom';
 import { PitchTrack } from '../audio/frames';
 import {
@@ -8,6 +19,7 @@ import {
   deleteNote,
   EMPTY_EDITS,
   hasEdits,
+  newManualId,
   updateNote,
   type NoteEdits,
 } from '../audio/noteEdits';
@@ -20,16 +32,18 @@ import { useSpectrogram } from '../hooks/useSpectrogram';
 import { ReferencePlayer } from '../audio/referencePlayer';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import { PlaybackClock } from '../audio/playbackClock';
-import { AnalysisPanel } from '../components/AnalysisPanel';
-import { AudioUpload } from '../components/AudioUpload';
+import { InfoTip } from '../components/InfoTip';
+import { MenuItem, Popover } from '../components/Popover';
+import { Panel } from '../components/Panel';
+import { ShortcutsDialog } from '../components/ShortcutsDialog';
+import { StudioToolbar, type StudioTool } from '../components/StudioToolbar';
+import { TrackReferencePanel } from '../components/TrackReferencePanel';
+import { ViewPopover } from '../components/ViewPopover';
 import { NavBar } from '../components/NavBar';
 import { PitchControls } from '../components/PitchControls';
 import { PitchGraph, type PenGesture, type PenOptions } from '../components/PitchGraph';
-import { PenToolbar } from '../components/PenToolbar';
 import { useNoteEdits } from '../hooks/useNoteEdits';
 import { EngineStats } from '../components/EngineStats';
-import { PlaybackControls } from '../components/PlaybackControls';
-import { StudioControls } from '../components/StudioControls';
 import { WaveformViewer } from '../components/WaveformViewer';
 import { useAudioSource } from '../hooks/useAudioFile';
 import { useAudioPlayback } from '../hooks/useAudioPlayback';
@@ -41,10 +55,12 @@ import {
   getAudio,
   getProject,
   getTake,
+  AUDIO_ACCEPT,
   isSupportedAudio,
   rememberProjectSettings,
   saveTake,
   setProjectAudio,
+  UNSUPPORTED_AUDIO_MESSAGE,
   updateProject,
 } from '../storage/projects';
 import type { AudioRecord, ProjectMeta, TakeRecord } from '../storage/projects';
@@ -55,7 +71,6 @@ import type { DetectionFilter } from '../utils/pitch';
 import { PIXELS_PER_SECOND } from '../utils/waveform';
 
 const TAKE_GRID_HZ = 200;
-const GRAPH_HEIGHT = 420;
 
 type Selection = { start: number; end: number };
 
@@ -319,7 +334,9 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   const noteEdits = useNoteEdits(projectId);
   const { preview: previewEdit, commit: commitEdit, cancel: cancelEdit, apply: applyEdit } = noteEdits;
   const { undo: undoEdit, redo: redoEdit, reset: resetEdits, edits: currentEdits } = noteEdits;
-  const [penMode, setPenMode] = useState(false);
+  // Pan and Select set what dragging the waveform does; Pen edits the reference notes on the graph.
+  const [tool, setTool] = useState<StudioTool>('pan');
+  const penMode = tool === 'pen';
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const referenceNotes = useMemo(() => applyEdits(autoNotes, currentEdits), [autoNotes, currentEdits]);
   useEffect(() => referencePlayer.setNotes(referenceNotes), [referencePlayer, referenceNotes]);
@@ -372,45 +389,6 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     setSelectedNoteId(null);
   };
 
-  // Shortcuts: P toggles pen mode, Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y
-  // redo, Delete/Backspace removes the selected note, Escape deselects.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('input, select, textarea, [contenteditable="true"]')) return;
-      const mod = event.ctrlKey || event.metaKey;
-      const key = event.key.toLowerCase();
-      if (mod && key === 'z') {
-        event.preventDefault();
-        if (event.shiftKey) redoEdit();
-        else undoEdit();
-        return;
-      }
-      if (mod && key === 'y') {
-        event.preventDefault();
-        redoEdit();
-        return;
-      }
-      if (mod || event.altKey) return;
-      if (key === 'p' && hasAudio) {
-        setPenMode((value) => !value);
-        return;
-      }
-      if (!penMode) return;
-      if ((key === 'delete' || key === 'backspace') && selectedNoteId) {
-        const note = referenceNotes?.findById(selectedNoteId);
-        if (note) {
-          event.preventDefault();
-          applyEdit((edits) => deleteNote(edits, note));
-          setSelectedNoteId(null);
-        }
-      } else if (key === 'escape') {
-        setSelectedNoteId(null);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [hasAudio, penMode, selectedNoteId, referenceNotes, applyEdit, undoEdit, redoEdit]);
   useEffect(() => {
     referencePlayer.setEnabled(studio.playReference && hasAudio);
     return () => referencePlayer.setEnabled(false);
@@ -447,7 +425,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   // Waveform view state
   const viewportRef = useRef<HTMLDivElement>(null);
   const playheadXRef = useRef<number | null>(null);
-  const [viewMode, setViewMode] = useState<'pan' | 'select'>('pan');
+  const viewMode = tool === 'select' ? 'select' : 'pan';
   const [panMode, setPanMode] = useState<'scroll' | 'scrub'>('scroll');
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -475,7 +453,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
       event.target.value = '';
       if (!file) return;
       if (!isSupportedAudio(file)) {
-        setUploadError('Please choose an MP3 file.');
+        setUploadError(UNSUPPORTED_AUDIO_MESSAGE);
         return;
       }
       const losing = [take.hasData() && 'take', hasEdits(currentEdits) && 'note edits'].filter(Boolean);
@@ -607,185 +585,468 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     downloadBytes(buildMidiFile([...notes]), `${baseName}-reference.mid`);
   };
 
+  const editCount = currentEdits.added.length + currentEdits.removed.length;
+  const noteCount = referenceNotes?.count ?? null;
+  const referenceReady = reference.status === 'ready';
+  const needsAnalysis = hasAudio && reference.status === 'idle' && reference.needsAnalysis === true;
+  const trackError = uploadError ?? error;
+
+  // Hidden file input shared by every "Add track" / "Change track" button.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const chooseFile = () => fileInputRef.current?.click();
+
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const closeShortcuts = useCallback(() => setShowShortcuts(false), []);
+
+  // Rec arms the mic too, so recording is one press.
+  const recording = studio.recordTake && armed;
+  const toggleRecord = () => {
+    if (recording) {
+      studio.setRecordTake(false);
+    } else {
+      studio.setRecordTake(true);
+      setArmed(true);
+    }
+  };
+
+  const goToStart = () => {
+    seekTo(loopEnabled && selection ? Math.min(selection.start, selection.end) : 0);
+  };
+
+  /** Moves the selected note by `semitones` and `seconds`. */
+  const nudgeSelected = (semitones: number, seconds: number) => {
+    const note = selectedNoteId ? referenceNotes?.findById(selectedNoteId) : null;
+    if (!note) return;
+    const dt = Math.max(-note.start, seconds);
+    const span = { midi: note.midi + semitones, start: note.start + dt, end: note.end + dt };
+    const newId = note.origin === 'manual' ? note.id : newManualId();
+    applyEdit((edits) => updateNote(edits, note, span, newId));
+    setSelectedNoteId(newId);
+    if (semitones !== 0) referencePlayer.audition(span.midi);
+  };
+
+  const changeTool = (next: StudioTool) => {
+    setTool(next);
+    if (next !== 'pen') setSelectedNoteId(null);
+  };
+
+  // Keyboard shortcuts (listed in ShortcutsDialog). The handler is refreshed
+  // every render, so it always sees current state without re-subscribing.
+  const onKeyRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  useEffect(() => {
+    onKeyRef.current = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, select, textarea, [contenteditable="true"], [role="dialog"]')) return;
+      const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (mod && key === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) redoEdit();
+        else undoEdit();
+        return;
+      }
+      if (mod && key === 'y') {
+        event.preventDefault();
+        redoEdit();
+        return;
+      }
+      if (mod || event.altKey) return;
+
+      if (event.key === ' ') {
+        event.preventDefault();
+        if (hasAudio) handlePlayPause();
+        return;
+      }
+      if (event.key === '?') {
+        setShowShortcuts(true);
+        return;
+      }
+      if (key === 'home') {
+        event.preventDefault();
+        if (hasAudio) goToStart();
+        return;
+      }
+      if (key === 'm') return setArmed((value) => !value);
+      if (key === 'r' && hasAudio) return toggleRecord();
+      if (key === 'l' && selection) return setLoopEnabled((value) => !value);
+      if (key === 'h' && hasAudio) return changeTool('pan');
+      if (key === 's' && hasAudio) return changeTool('select');
+      if (key === 'p' && hasAudio && noteEdits.loaded) return changeTool(penMode ? 'pan' : 'pen');
+
+      if (!penMode) return;
+      if ((key === 'delete' || key === 'backspace') && selectedNoteId) {
+        const note = referenceNotes?.findById(selectedNoteId);
+        if (note) {
+          event.preventDefault();
+          applyEdit((edits) => deleteNote(edits, note));
+          setSelectedNoteId(null);
+        }
+      } else if (key === 'escape') {
+        setSelectedNoteId(null);
+      } else if (selectedNoteId && event.key.startsWith('Arrow')) {
+        event.preventDefault();
+        const step = event.shiftKey ? 12 : 1;
+        const nudge = event.shiftKey ? 0.01 : 0.05;
+        if (event.key === 'ArrowUp') nudgeSelected(step, 0);
+        else if (event.key === 'ArrowDown') nudgeSelected(-step, 0);
+        else if (event.key === 'ArrowLeft') nudgeSelected(0, -nudge);
+        else if (event.key === 'ArrowRight') nudgeSelected(0, nudge);
+      }
+    };
+  });
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => onKeyRef.current(event);
+    // A focused button would also "click" on Space's keyup; Space means play/pause here.
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === ' ' && (event.target as HTMLElement | null)?.closest('button')) event.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
+
+  // What the graph says when there's nothing to show yet.
+  let overlay: ReactNode = null;
+  if (!hasAudio && trackError) {
+    overlay = (
+      <>
+        <p>{trackError}</p>
+        <button type="button" className="btn-primary" onClick={chooseFile}>
+          <FiUpload /> Choose another file
+        </button>
+      </>
+    );
+  } else if (!audio) {
+    overlay = (
+      <>
+        <p>
+          <strong>This project has no track yet.</strong>
+        </p>
+        <p className="hint">
+          Add an MP3, WAV, M4A, FLAC or OGG file. It's saved with the project, so you only do this once.
+        </p>
+        <button type="button" className="btn-primary" onClick={chooseFile}>
+          <FiUpload /> Add track
+        </button>
+      </>
+    );
+  } else if (!hasAudio) {
+    overlay = <p>Decoding audio...</p>;
+  } else if (reference.status === 'analyzing') {
+    overlay = <p>Analyzing the track... {Math.round(reference.progress * 100)}%</p>;
+  } else if (needsAnalysis && studio.showReference) {
+    overlay = (
+      <>
+        <p>
+          <strong>Analyze this track to see its notes.</strong>
+        </p>
+        <p className="hint">Method, window and note range are under Track &amp; reference, below.</p>
+        <button type="button" className="btn-primary" onClick={() => void analyze(analysis)}>
+          <FiPlay /> Analyze
+        </button>
+      </>
+    );
+  }
+
+  const trackSummary = fileName
+    ? `${fileName}${
+        referenceReady
+          ? ` · ${noteCount ?? 0} notes`
+          : needsAnalysis
+            ? ' · not analyzed'
+            : reference.status === 'analyzing'
+              ? ' · analyzing'
+              : ''
+      }`
+    : 'No track';
+  const beatSummary = !hasAudio
+    ? undefined
+    : beatDetection.status === 'ready'
+      ? `${Math.round(beatGrid?.bpm ?? 0)} BPM${studio.metronome ? ' · metronome on' : ''}`
+      : beatDetection.status === 'error'
+        ? 'Detection failed'
+        : 'Finding beats...';
+  const micSummary = `${armed ? 'Mic on' : 'Mic off'} · clarity ${Math.round(controls.clarityThreshold * 100)}%${
+    studio.syncOffsetMs ? ` · offset ${studio.syncOffsetMs} ms` : ''
+  }`;
+
+  const view = (
+    <ViewPopover
+      showReference={studio.showReference}
+      setShowReference={studio.setShowReference}
+      referenceOpacity={studio.referenceOpacity}
+      setReferenceOpacity={studio.setReferenceOpacity}
+      showSpectrogram={studio.showSpectrogram}
+      setShowSpectrogram={studio.setShowSpectrogram}
+      spectrogramView={studio.spectrogramView}
+      setSpectrogramView={studio.setSpectrogramView}
+      spectrogramRange={studio.spectrogramRange}
+      setSpectrogramRange={studio.setSpectrogramRange}
+      spectrogramOpacity={studio.spectrogramOpacity}
+      setSpectrogramOpacity={studio.setSpectrogramOpacity}
+      spectrogramStatus={
+        spectrogram.status === 'computing'
+          ? `Computing... ${Math.round(spectrogram.progress * 100)}%`
+          : spectrogram.status === 'error'
+            ? `Failed: ${spectrogram.message}`
+            : null
+      }
+      showBeats={studio.showBeats}
+      setShowBeats={studio.setShowBeats}
+      showNoteTrails={controls.showNoteTrails}
+      setShowNoteTrails={controls.setShowNoteTrails}
+      trailOpacity={controls.trailOpacity}
+      setTrailOpacity={controls.setTrailOpacity}
+      showNoteLines={controls.showNoteLines}
+      setShowNoteLines={controls.setShowNoteLines}
+      colorizeMarker={controls.colorizeMarker}
+      setColorizeMarker={controls.setColorizeMarker}
+    />
+  );
+
+  const menu = (
+    <Popover
+      kind="menu"
+      label="More actions"
+      trigger={(trigger) => (
+        <button type="button" className="icon-button" {...trigger} aria-label="More actions" title="More actions">
+          <FiMoreHorizontal />
+        </button>
+      )}
+    >
+      {(close) => (
+        <>
+          <MenuItem close={close} icon={<FiDownload />} onSelect={exportTake} disabled={!hasAudio}>
+            Export take as MIDI
+          </MenuItem>
+          <MenuItem close={close} icon={<FiDownload />} onSelect={exportReference} disabled={!referenceReady}>
+            Export reference as MIDI
+          </MenuItem>
+          <div className="menu__sep" role="separator" />
+          <MenuItem close={close} icon={<FiTrash2 />} onSelect={clearTake} disabled={!hasAudio} danger>
+            Clear take...
+          </MenuItem>
+          <MenuItem close={close} icon={<FiXCircle />} onSelect={clearEdits} disabled={editCount === 0} danger>
+            Clear note edits...
+          </MenuItem>
+          <div className="menu__sep" role="separator" />
+          <MenuItem
+            close={close}
+            icon={<FiTool />}
+            onSelect={() => void debugExport()}
+            disabled={!hasAudio}
+            title="Save the decoded audio (WAV), reference contour (CSV) and settings (JSON) to debug-exports/ in the project"
+          >
+            Debug export
+          </MenuItem>
+          <MenuItem close={close} icon={<FiCommand />} onSelect={() => setShowShortcuts(true)}>
+            Keyboard shortcuts <kbd>?</kbd>
+          </MenuItem>
+        </>
+      )}
+    </Popover>
+  );
+
   return (
     <div className="app">
       <NavBar title={project.name} />
-      <EngineStats engine={engine} filter={filter} layout="row" />
       {micError && <div className="error">{micError}</div>}
 
-      <div className="card waveform-card">
-        <PenToolbar
-          enabled={hasAudio && noteEdits.loaded}
-          penMode={penMode}
-          onTogglePen={() => setPenMode((value) => !value)}
-          canUndo={noteEdits.canUndo}
-          canRedo={noteEdits.canRedo}
-          onUndo={undoEdit}
-          onRedo={redoEdit}
-          editCount={currentEdits.added.length + currentEdits.removed.length}
-          onClearEdits={clearEdits}
-        />
-        <PitchGraph
-          className="studio-graph"
-          mode={{
-            kind: 'timeline',
-            viewportRef,
-            pixelsPerSecond: PIXELS_PER_SECOND,
-            clock,
-            take,
-            preview: studio.recordTake ? null : preview,
-            previewSeconds: controls.historyDuration,
-            reference: studio.showReference || pen ? referenceNotes : null,
-            pen,
-            spectrogram: studio.showSpectrogram ? spectrogramImage : null,
-            beats: studio.showBeats ? beatGrid : null,
-            spectrogramOpacity: studio.spectrogramOpacity,
-            referenceOpacity: studio.referenceOpacity,
-            playheadXRef,
-            showLiveMarker: armed && detectionActive,
-          }}
-          engine={engine}
-          filter={filter}
-          colorizeMarker={controls.colorizeMarker}
-          showNoteLines={controls.showNoteLines}
-          showNoteTrails={controls.showNoteTrails}
-          trailOpacity={controls.trailOpacity}
-          showDiagnostics={controls.showDiagnostics}
-          height={GRAPH_HEIGHT}
-          onSeek={hasAudio ? seekTo : undefined}
-        />
-
-        <WaveformViewer
-          peaks={peaks}
-          audioRef={audioRef}
-          duration={duration}
-          isPlaying={isPlaying}
-          currentTime={currentTime}
-          onSeek={seekTo}
-          clock={clock}
-          hoverTimeRef={hoverTimeRef}
-          viewMode={viewMode}
-          panMode={panMode}
-          viewportRef={viewportRef}
-          playheadXRef={playheadXRef}
-          selection={selection}
-          onSelectionChange={handleSelectionChange}
-        />
-
-        <PlaybackControls
-          isPlaying={isPlaying}
+      <div className="card workspace">
+        <StudioToolbar
           hasAudio={hasAudio}
+          isPlaying={isPlaying}
           getTime={getSongTime}
-          duration={duration}
           getHoverTime={getHoverTime}
-          viewMode={viewMode}
-          panMode={panMode}
-          loopEnabled={loopEnabled}
-          hasSelection={Boolean(selection)}
+          duration={duration}
           onPlayPause={handlePlayPause}
           onStop={() => {
             stop();
             resetPreview();
           }}
-          onViewModeChange={setViewMode}
-          onPanModeChange={setPanMode}
+          micOn={armed}
+          onToggleMic={() => setArmed((value) => !value)}
+          recording={recording}
+          onToggleRecord={toggleRecord}
+          hasSelection={Boolean(selection)}
+          loopEnabled={loopEnabled}
           onToggleLoop={() => setLoopEnabled((value) => !value)}
           onClearSelection={handleSelectionClear}
+          tool={tool}
+          onToolChange={changeTool}
+          penAvailable={noteEdits.loaded}
+          panMode={panMode}
+          onPanModeChange={setPanMode}
+          canUndo={noteEdits.canUndo}
+          canRedo={noteEdits.canRedo}
+          onUndo={undoEdit}
+          onRedo={redoEdit}
+          editCount={editCount}
           playbackRate={studio.playbackRate}
           onPlaybackRateChange={studio.setPlaybackRate}
+          view={view}
+          menu={menu}
+          status={debugExportStatus}
         />
 
+        <div className="workspace__canvas">
+          <div className="graph-wrap">
+            <PitchGraph
+              className={`studio-graph${penMode ? ' studio-graph--pen' : ''}`}
+              mode={{
+                kind: 'timeline',
+                viewportRef,
+                pixelsPerSecond: PIXELS_PER_SECOND,
+                clock,
+                take,
+                preview: studio.recordTake ? null : preview,
+                previewSeconds: controls.historyDuration,
+                reference: studio.showReference || pen ? referenceNotes : null,
+                pen,
+                spectrogram: studio.showSpectrogram ? spectrogramImage : null,
+                beats: studio.showBeats ? beatGrid : null,
+                spectrogramOpacity: studio.spectrogramOpacity,
+                referenceOpacity: studio.referenceOpacity,
+                playheadXRef,
+                showLiveMarker: armed && detectionActive,
+              }}
+              engine={engine}
+              filter={filter}
+              colorizeMarker={controls.colorizeMarker}
+              showNoteLines={controls.showNoteLines}
+              showNoteTrails={controls.showNoteTrails}
+              trailOpacity={controls.trailOpacity}
+              showDiagnostics={controls.showDiagnostics}
+              onSeek={hasAudio ? seekTo : undefined}
+            />
+            {armed && <EngineStats engine={engine} filter={filter} layout="overlay" />}
+            {penMode && (
+              <span className="pen-badge">
+                <FiEdit2 aria-hidden="true" /> Pen: click to add, drag to move, right-click to delete
+              </span>
+            )}
+            {overlay && (
+              <div className="graph-overlay">
+                <div className="graph-overlay__box" role="status">
+                  {overlay}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <WaveformViewer
+            peaks={peaks}
+            audioRef={audioRef}
+            duration={duration}
+            isPlaying={isPlaying}
+            currentTime={currentTime}
+            onSeek={seekTo}
+            clock={clock}
+            hoverTimeRef={hoverTimeRef}
+            viewMode={viewMode}
+            panMode={panMode}
+            viewportRef={viewportRef}
+            playheadXRef={playheadXRef}
+            selection={selection}
+            onSelectionChange={handleSelectionChange}
+          />
+        </div>
+
         <audio ref={audioRef} src={audioUrl ?? undefined} preload="auto" hidden />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={AUDIO_ACCEPT}
+          hidden
+          onChange={(event) => void handleUpload(event)}
+        />
       </div>
 
-      <AudioUpload
-        fileName={fileName}
-        isDecoding={isDecoding}
-        error={uploadError ?? error}
-        collapsed={hasAudio && !isDecoding && !error && !uploadError}
-        onFileChange={(event) => void handleUpload(event)}
-      />
+      <div className="panels">
+        <Panel id="studio.track" title="Track & reference" summary={trackSummary} defaultOpen>
+          <TrackReferencePanel
+            hasAudio={hasAudio}
+            fileName={fileName}
+            isDecoding={isDecoding}
+            error={trackError}
+            onChooseFile={chooseFile}
+            applied={analysis}
+            reference={reference}
+            noteCount={noteCount}
+            onAnalyze={(next) => void analyze(next)}
+            referenceClarity={studio.referenceClarity}
+            setReferenceClarity={studio.setReferenceClarity}
+            playReference={studio.playReference}
+            setPlayReference={studio.setPlayReference}
+            referenceVolume={studio.referenceVolume}
+            setReferenceVolume={studio.setReferenceVolume}
+            trackVolume={studio.trackVolume}
+            setTrackVolume={studio.setTrackVolume}
+          />
+        </Panel>
 
-      <AnalysisPanel
-        hasAudio={hasAudio}
-        applied={analysis}
-        reference={reference}
-        noteCount={referenceNotes?.count ?? null}
-        onAnalyze={(next) => void analyze(next)}
-      />
+        <Panel id="studio.beats" title="Beats" summary={beatSummary}>
+          <BeatControls
+            hasAudio={hasAudio}
+            detection={beatDetection}
+            bpm={beatGrid?.bpm ?? 0}
+            snapLoop={studio.snapLoopToBeats}
+            setSnapLoop={studio.setSnapLoopToBeats}
+            metronome={studio.metronome}
+            setMetronome={studio.setMetronome}
+            metronomeVolume={studio.metronomeVolume}
+            setMetronomeVolume={studio.setMetronomeVolume}
+            beatScale={studio.beatScale}
+            setBeatScale={studio.setBeatScale}
+            beatsPerGroup={studio.beatsPerGroup}
+            setBeatsPerGroup={studio.setBeatsPerGroup}
+            beatOffset={studio.beatOffset}
+            setBeatOffset={studio.setBeatOffset}
+          />
+        </Panel>
 
-      <BeatControls
-        hasAudio={hasAudio}
-        detection={beatDetection}
-        bpm={beatGrid?.bpm ?? 0}
-        showBeats={studio.showBeats}
-        setShowBeats={studio.setShowBeats}
-        snapLoop={studio.snapLoopToBeats}
-        setSnapLoop={studio.setSnapLoopToBeats}
-        metronome={studio.metronome}
-        setMetronome={studio.setMetronome}
-        metronomeVolume={studio.metronomeVolume}
-        setMetronomeVolume={studio.setMetronomeVolume}
-        beatScale={studio.beatScale}
-        setBeatScale={studio.setBeatScale}
-        beatsPerGroup={studio.beatsPerGroup}
-        setBeatsPerGroup={studio.setBeatsPerGroup}
-        beatOffset={studio.beatOffset}
-        setBeatOffset={studio.setBeatOffset}
-      />
+        <Panel id="studio.mic" title="Mic & detection" summary={micSummary}>
+          <div className="panel__section">
+            <span className="section-label">While singing</span>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={studio.onlyWhilePlaying}
+                onChange={(event) => studio.setOnlyWhilePlaying(event.target.checked)}
+              />
+              Only detect while the track is playing
+            </label>
+            <label className="slider-row">
+              <span className="slider-row__text">Sync offset: {studio.syncOffsetMs} ms</span>
+              <input
+                type="range"
+                min={-200}
+                max={400}
+                step={5}
+                value={studio.syncOffsetMs}
+                onChange={(event) => studio.setSyncOffsetMs(parseInt(event.target.value, 10))}
+              />
+              <InfoTip>
+                Shifts your take earlier to cancel mic and speaker latency. Sing along with a clear part of
+                the track and adjust until your line sits on the reference.
+              </InfoTip>
+            </label>
+          </div>
+          <PitchControls
+            {...controls}
+            enabled={armed}
+            setEnabled={setArmed}
+            bare
+            showMicButton={false}
+            showDisplay={false}
+          />
+        </Panel>
+      </div>
 
-      <StudioControls
-        hasAudio={hasAudio}
-        micArmed={armed}
-        recordTake={studio.recordTake}
-        setRecordTake={studio.setRecordTake}
-        onlyWhilePlaying={studio.onlyWhilePlaying}
-        setOnlyWhilePlaying={studio.setOnlyWhilePlaying}
-        showReference={studio.showReference}
-        setShowReference={studio.setShowReference}
-        referenceClarity={studio.referenceClarity}
-        setReferenceClarity={studio.setReferenceClarity}
-        referenceOpacity={studio.referenceOpacity}
-        setReferenceOpacity={studio.setReferenceOpacity}
-        syncOffsetMs={studio.syncOffsetMs}
-        setSyncOffsetMs={studio.setSyncOffsetMs}
-        playReference={studio.playReference}
-        setPlayReference={studio.setPlayReference}
-        referenceVolume={studio.referenceVolume}
-        setReferenceVolume={studio.setReferenceVolume}
-        trackVolume={studio.trackVolume}
-        setTrackVolume={studio.setTrackVolume}
-
-        referenceReady={reference.status === 'ready'}
-        showSpectrogram={studio.showSpectrogram}
-        setShowSpectrogram={studio.setShowSpectrogram}
-        spectrogramView={studio.spectrogramView}
-        setSpectrogramView={studio.setSpectrogramView}
-        spectrogramRange={studio.spectrogramRange}
-        setSpectrogramRange={studio.setSpectrogramRange}
-        spectrogramOpacity={studio.spectrogramOpacity}
-        setSpectrogramOpacity={studio.setSpectrogramOpacity}
-        spectrogramStatus={
-          spectrogram.status === 'computing'
-            ? `Computing... ${Math.round(spectrogram.progress * 100)}%`
-            : spectrogram.status === 'error'
-              ? `Failed: ${spectrogram.message}`
-              : null
-        }
-        onClearTake={clearTake}
-        onExportTake={exportTake}
-        onExportReference={exportReference}
-        onDebugExport={() => void debugExport()}
-        debugExportStatus={debugExportStatus}
-      />
-
-
-
-      <PitchControls
-        {...controls}
-        enabled={armed}
-        setEnabled={setArmed}
-      />
+      {showShortcuts && <ShortcutsDialog onClose={closeShortcuts} />}
     </div>
   );
 }

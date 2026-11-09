@@ -232,8 +232,17 @@ export function probeDuration(blob: Blob): Promise<number | null> {
   });
 }
 
+/** Formats browsers can decode reliably. */
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'oga', 'opus', 'webm'];
+
+/** For <input type="file" accept>. */
+export const AUDIO_ACCEPT = ['audio/*', ...AUDIO_EXTENSIONS.map((ext) => `.${ext}`)].join(',');
+
+export const UNSUPPORTED_AUDIO_MESSAGE = 'Please choose an audio file: MP3, WAV, M4A, FLAC or OGG.';
+
 export function isSupportedAudio(file: File) {
-  return file.type === 'audio/mpeg' || file.name.toLowerCase().endsWith('.mp3');
+  const ext = file.name.toLowerCase().split('.').pop() ?? '';
+  return AUDIO_EXTENSIONS.includes(ext) || file.type.startsWith('audio/');
 }
 
 function displayNameFromFile(fileName: string) {
@@ -436,6 +445,31 @@ export async function clearReferences(audioId: string) {
   await transact(['references'], 'readwrite', async (tx) => {
     const keys = await asPromise(tx.objectStore('references').index('audioId').getAllKeys(audioId));
     for (const key of keys) tx.objectStore('references').delete(key);
+  });
+}
+
+/** For the library listing: which tracks have a saved analysis, and how many edits each project has. */
+export async function libraryStatus(): Promise<{ analyzedAudio: Set<string>; editCounts: Map<string, number> }> {
+  return transact(['references', 'edits'], 'readonly', async (tx) => {
+    const editsRequest = asPromise(tx.objectStore('edits').getAll() as IDBRequest<EditsRecord[]>);
+    // Walk the audioId index's keys: one entry per cached analysis, keyed by its track.
+    const analyzedAudio = new Set<string>();
+    await new Promise<void>((resolve, reject) => {
+      const request = tx.objectStore('references').index('audioId').openKeyCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        analyzedAudio.add(String(cursor.key));
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+    const edits = await editsRequest;
+    const editCounts = new Map(edits.map((record) => [record.projectId, record.added.length + record.removed.length]));
+    return { analyzedAudio, editCounts };
   });
 }
 

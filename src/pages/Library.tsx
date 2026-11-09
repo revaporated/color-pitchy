@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiCopy, FiEdit2, FiMusic, FiPlus, FiTrash2, FiX } from 'react-icons/fi';
+import { FiChevronRight, FiCopy, FiEdit2, FiMoreHorizontal, FiMusic, FiPlus, FiTrash2, FiUpload, FiX } from 'react-icons/fi';
 import { NavBar } from '../components/NavBar';
+import { MenuItem, Popover } from '../components/Popover';
 import {
+  AUDIO_ACCEPT,
   createProject,
   deleteProject,
   duplicateProject,
   isSupportedAudio,
+  libraryStatus,
   listAudio,
   listProjects,
   storageEstimate,
+  UNSUPPORTED_AUDIO_MESSAGE,
   updateProject,
 } from '../storage/projects';
 import type { AudioSummary, ProjectMeta } from '../storage/projects';
@@ -43,11 +47,18 @@ type LibraryData = {
   projects: ProjectMeta[];
   audio: AudioSummary[];
   storage: { usage: number; quota: number } | null;
+  analyzedAudio: Set<string>;
+  editCounts: Map<string, number>;
 };
 
 async function loadLibrary(): Promise<LibraryData> {
-  const [projects, audio, storage] = await Promise.all([listProjects(), listAudio(), storageEstimate()]);
-  return { projects, audio, storage };
+  const [projects, audio, storage, status] = await Promise.all([
+    listProjects(),
+    listAudio(),
+    storageEstimate(),
+    libraryStatus(),
+  ]);
+  return { projects, audio, storage, ...status };
 }
 
 /** Projects saved in this browser. Each one opens in Studio with its track and take. */
@@ -106,13 +117,13 @@ export default function LibraryPage() {
         <div className="library__header">
           <div>
             <h1>Library</h1>
-            <p className="studio-hint">
-              Projects are saved in this browser, track and take included. Several projects can use the
-              same track.
+            <p className="hint">
+              Projects are saved in this browser, track and take included. Several projects can use the same
+              track.
             </p>
           </div>
-          {!showForm && (
-            <button type="button" className="library__add" onClick={() => setShowForm(true)}>
+          {!showForm && projects.length > 0 && (
+            <button type="button" className="btn-primary" onClick={() => setShowForm(true)}>
               <FiPlus /> New project
             </button>
           )}
@@ -136,18 +147,23 @@ export default function LibraryPage() {
         )}
 
         {data === null ? (
-          <p className="studio-hint">Loading...</p>
+          <p className="hint">Loading...</p>
         ) : projects.length === 0 ? (
           !showForm && (
             <div className="library__empty">
-              <FiMusic />
+              <FiMusic aria-hidden="true" />
               <p>No projects yet. Create one to load a track and start singing over it.</p>
+              <button type="button" className="btn-primary" onClick={() => setShowForm(true)}>
+                <FiPlus /> New project
+              </button>
             </div>
           )
         ) : (
           <ul className="library__list">
-            {projects.map((project) => (
-              <li key={project.id} className="library__item">
+            {projects.map((project) => {
+              const analyzed = project.audioId !== null && data.analyzedAudio.has(project.audioId);
+              const edits = data.editCounts.get(project.id) ?? 0;
+              const info = (
                 <div className="library__info">
                   {renamingId === project.id ? (
                     <RenameField
@@ -158,9 +174,7 @@ export default function LibraryPage() {
                       }}
                     />
                   ) : (
-                    <Link to={`/studio/${project.id}`} className="library__name">
-                      {project.name}
-                    </Link>
+                    <span className="library__name">{project.name}</span>
                   )}
                   <div className="library__meta">
                     {project.fileName ? (
@@ -169,51 +183,72 @@ export default function LibraryPage() {
                         {formatDuration(project.duration) && ` · ${formatDuration(project.duration)}`}
                       </span>
                     ) : (
-                      <span className="file-meta">No track</span>
+                      <span className="hint">No track</span>
                     )}
-                    {project.hasTake && <span className="library__badge">Take</span>}
-                    <span className="studio-hint">Edited {formatAgo(project.updatedAt)}</span>
+                    {analyzed && <span className="badge badge--analyzed">Analyzed</span>}
+                    {edits > 0 && (
+                      <span className="badge badge--edits">
+                        {edits} edit{edits === 1 ? '' : 's'}
+                      </span>
+                    )}
+                    {project.hasTake && <span className="badge badge--take">Take</span>}
+                    <span className="hint">Edited {formatAgo(project.updatedAt)}</span>
                   </div>
                 </div>
-                <div className="library__actions">
-                  <button type="button" onClick={() => navigate(`/studio/${project.id}`)}>
-                    Open in Studio
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    onClick={() => setRenamingId(project.id)}
-                    title="Rename"
-                    aria-label={`Rename ${project.name}`}
+              );
+              return (
+                <li key={project.id} className="library__item">
+                  {renamingId === project.id ? (
+                    <div className="library__row">{info}</div>
+                  ) : (
+                    <Link to={`/studio/${project.id}`} className="library__row" aria-label={`Open ${project.name} in Studio`}>
+                      {info}
+                      <FiChevronRight aria-hidden="true" />
+                    </Link>
+                  )}
+                  <Popover
+                    kind="menu"
+                    label={`${project.name} actions`}
+                    trigger={(trigger) => (
+                      <button
+                        type="button"
+                        className="icon-button btn-ghost"
+                        {...trigger}
+                        aria-label={`More actions for ${project.name}`}
+                        title="More actions"
+                      >
+                        <FiMoreHorizontal />
+                      </button>
+                    )}
                   >
-                    <FiEdit2 />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    onClick={() => void run(() => duplicateProject(project.id))}
-                    title="Duplicate (shares the track, copies the take)"
-                    aria-label={`Duplicate ${project.name}`}
-                  >
-                    <FiCopy />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button library__delete"
-                    onClick={() => remove(project)}
-                    title="Delete"
-                    aria-label={`Delete ${project.name}`}
-                  >
-                    <FiTrash2 />
-                  </button>
-                </div>
-              </li>
-            ))}
+                    {(close) => (
+                      <>
+                        <MenuItem close={close} icon={<FiEdit2 />} onSelect={() => setRenamingId(project.id)}>
+                          Rename
+                        </MenuItem>
+                        <MenuItem
+                          close={close}
+                          icon={<FiCopy />}
+                          onSelect={() => void run(() => duplicateProject(project.id))}
+                          title="Shares the track, copies the take"
+                        >
+                          Duplicate
+                        </MenuItem>
+                        <div className="menu__sep" role="separator" />
+                        <MenuItem close={close} icon={<FiTrash2 />} onSelect={() => remove(project)} danger>
+                          Delete...
+                        </MenuItem>
+                      </>
+                    )}
+                  </Popover>
+                </li>
+              );
+            })}
           </ul>
         )}
 
         {data?.storage && data.storage.usage > 0 && (
-          <p className="studio-hint library__storage">
+          <p className="hint library__storage">
             Using {formatBytes(data.storage.usage)}
             {data.storage.quota > 0 && ` of ${formatBytes(data.storage.quota)} available to this site`}
           </p>
@@ -233,6 +268,7 @@ function RenameField({ initial, onDone }: { initial: string; onDone: (name: stri
   };
   return (
     <input
+      type="text"
       className="library__rename"
       autoFocus
       value={value}
@@ -265,7 +301,7 @@ function NewProjectForm({ audio, onCancel, onCreated }: FormProps) {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (file && !isSupportedAudio(file)) {
-      setError('Please choose an MP3 file.');
+      setError(UNSUPPORTED_AUDIO_MESSAGE);
       return;
     }
     setBusy(true);
@@ -301,29 +337,37 @@ function NewProjectForm({ audio, onCancel, onCreated }: FormProps) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="audio/mpeg,.mp3"
+            accept={AUDIO_ACCEPT}
+            hidden
             onChange={(event) => {
               setFile(event.target.files?.[0] ?? null);
               setError(null);
             }}
           />
-          {file && (
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Remove file"
-              onClick={() => {
-                setFile(null);
-                if (fileInputRef.current) fileInputRef.current.value = '';
-              }}
-            >
-              <FiX />
+          <span className="file-picker">
+            <button type="button" onClick={() => fileInputRef.current?.click()}>
+              <FiUpload /> {file ? 'Choose a different file' : 'Choose audio file'}
             </button>
-          )}
-          {audio.length > 0 && (
+            {file && (
+              <>
+                <span className="file-meta">{file.name}</span>
+                <button
+                  type="button"
+                  className="icon-button btn-ghost"
+                  aria-label="Remove file"
+                  onClick={() => {
+                    setFile(null);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                >
+                  <FiX />
+                </button>
+              </>
+            )}
+          </span>
+          {audio.length > 0 && !file && (
             <select
-              value={file ? '' : audioId}
-              disabled={Boolean(file)}
+              value={audioId}
               onChange={(event) => setAudioId(event.target.value)}
               aria-label="Reuse a track from the library"
             >
@@ -336,16 +380,16 @@ function NewProjectForm({ audio, onCancel, onCreated }: FormProps) {
             </select>
           )}
         </div>
-        <span className="studio-hint">Optional. You can add a track later in Studio.</span>
+        <span className="hint">Optional: MP3, WAV, M4A, FLAC or OGG. You can add a track later in Studio.</span>
       </div>
 
       {error && <div className="error">{error}</div>}
 
       <div className="library__form-actions">
-        <button type="submit" disabled={busy}>
+        <button type="submit" className="btn-primary" disabled={busy}>
           {busy ? 'Creating...' : 'Create and open'}
         </button>
-        <button type="button" className="toggle-button" onClick={onCancel} disabled={busy}>
+        <button type="button" className="btn-ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
       </div>

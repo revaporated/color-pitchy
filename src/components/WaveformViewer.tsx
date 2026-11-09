@@ -621,7 +621,7 @@ export const WaveformViewer = ({
           )}
         </>
       ) : (
-        <div className="waveform-placeholder">Load an MP3 to see the waveform.</div>
+        <div className="waveform-placeholder">Add a track to see the waveform.</div>
       )}
       <div ref={hoverLineRef} className="waveform-hover-line" aria-hidden="true" />
       <div ref={playheadRef} className="waveform-playhead" aria-hidden="true" />

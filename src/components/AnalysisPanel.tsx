@@ -55,10 +55,10 @@ export function AnalysisPanel({ hasAudio, applied, reference, noteCount, onAnaly
   const rerun = !dirty && reference.status === 'ready';
 
   return (
-    <div className="card controls analysis-panel">
+    <div className="panel__section analysis-panel">
       <div className="analysis-panel__header">
-        <strong>Reference analysis</strong>
-        <span className="studio-hint">{status}</span>
+        <span className="section-label">Analysis</span>
+        <span className="hint" role="status">{status}</span>
       </div>
 
       <div className="slider-row" role="radiogroup" aria-label="Analysis method">
@@ -102,7 +102,7 @@ export function AnalysisPanel({ hasAudio, applied, reference, noteCount, onAnaly
           />
           <InfoTip>
             How reluctant the tracker is to change notes. Higher removes flicker and blips but can
-            merge very fast notes. The tracker decides when a note is sounding, so Reference clarity
+            merge very fast notes. The tracker decides when a note is sounding, so Min confidence
             has no effect while smoothing is on.
           </InfoTip>
         </label>

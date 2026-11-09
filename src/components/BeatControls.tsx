@@ -9,8 +9,6 @@ type Props = {
   detection: BeatState;
   /** Tempo of the beats in use (after halving/doubling), or 0. */
   bpm: number;
-  showBeats: boolean;
-  setShowBeats: Dispatch<SetStateAction<boolean>>;
   snapLoop: boolean;
   setSnapLoop: Dispatch<SetStateAction<boolean>>;
   metronome: boolean;
@@ -33,8 +31,6 @@ export function BeatControls(props: Props) {
     hasAudio,
     detection,
     bpm,
-    showBeats,
-    setShowBeats,
     snapLoop,
     setSnapLoop,
     metronome,
@@ -60,17 +56,13 @@ export function BeatControls(props: Props) {
   const scaleIndex = SCALES.indexOf(beatScale);
 
   return (
-    <div className="card controls">
-      <div className="analysis-panel__header">
-        <strong>Beats</strong>
-        <span className="studio-hint">{status}</span>
-      </div>
-
+    <>
+      <div className="panel__section">
+        <div className="analysis-panel__header">
+          <span className="section-label">Detected</span>
+          <span className="hint" role="status">{status}</span>
+        </div>
       <div className="checkbox-group">
-        <label className="checkbox">
-          <input type="checkbox" checked={showBeats} onChange={(event) => setShowBeats(event.target.checked)} />
-          Show beats
-        </label>
         <label className="checkbox">
           <input type="checkbox" checked={snapLoop} onChange={(event) => setSnapLoop(event.target.checked)} />
           Snap loop to beats
@@ -92,7 +84,10 @@ export function BeatControls(props: Props) {
           />
         </label>
       </div>
+      </div>
 
+      <div className="panel__section">
+        <span className="section-label">Fix tempo and bars</span>
       <div className="stepper-group">
         <Stepper
           label="Tempo"
@@ -127,6 +122,7 @@ export function BeatControls(props: Props) {
           downbeat, shift it until it does. The metronome accents the first beat of each group.
         </InfoTip>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

@@ -4,8 +4,8 @@ import { formatNoteLabel, type PitchSample } from '../utils/pitch';
 type Props = {
   sample: PitchSample;
   isFullscreen?: boolean;
-  /** 'row' lays the readouts out horizontally in a normal card. */
-  layout?: 'stack' | 'row';
+  /** 'row' lays the readouts out horizontally in a normal card; 'overlay' floats them over the graph. */
+  layout?: 'stack' | 'row' | 'overlay';
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 };
@@ -61,6 +61,25 @@ export function PitchStats({
             </button>
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (layout === 'overlay') {
+    return (
+      <div className="graph-stats" aria-live="off">
+        <div className="stat">
+          <span className="stat-label">Note</span>
+          <span className="stat-value">{noteLabel}</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Frequency</span>
+          <span className="stat-value">{frequencyLabel}</span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Clarity</span>
+          <span className="stat-value">{clarityLabel}</span>
+        </div>
       </div>
     );
   }

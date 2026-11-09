@@ -16,6 +16,7 @@ import {
   type DetectionFilter,
 } from '../utils/pitch';
 import { PLAYHEAD_WIDTH } from '../utils/waveform';
+import { graphPalette, subscribeTheme } from '../theme';
 
 /** Live: a rolling window ending "now" on the performance clock. */
 export type LiveGraphMode = {
@@ -109,8 +110,6 @@ type Props = {
   className?: string;
 };
 
-const BACKGROUND = '#f8fafc';
-const TAKE_LINE = '#334155';
 const MAX_GAP_SECONDS = 0.06; // break lines across gaps longer than this
 const MARKER_MAX_AGE = 0.25; // seconds; older frames don't get a "current" marker
 /**
@@ -200,6 +199,15 @@ export function PitchGraph(props: Props) {
     [props.engine],
   );
 
+  // Repaint in the new colors when the theme changes.
+  useEffect(
+    () =>
+      subscribeTheme(() => {
+        dirtyRef.current = true;
+      }),
+    [],
+  );
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -227,7 +235,7 @@ export function PitchGraph(props: Props) {
     let canvasHeight = 0;
     let canvasDpr = 0;
     const staticCanvas = document.createElement('canvas');
-    const staticKey = { width: 0, height: 0, dpr: 0, lo: Number.NaN, hi: Number.NaN, noteLines: false };
+    const staticKey = { width: 0, height: 0, dpr: 0, lo: Number.NaN, hi: Number.NaN, noteLines: false, palette: -1 };
     // Two draw states, reused every frame so the skip check doesn't allocate.
     const seen = emptyDrawState();
     const next = emptyDrawState();
@@ -268,7 +276,8 @@ export function PitchGraph(props: Props) {
         staticKey.dpr !== dpr ||
         staticKey.lo !== lo ||
         staticKey.hi !== hi ||
-        staticKey.noteLines !== p.showNoteLines
+        staticKey.noteLines !== p.showNoteLines ||
+        staticKey.palette !== graphPalette.version
       ) {
         staticCanvas.width = pixelWidth;
         staticCanvas.height = pixelHeight;
@@ -283,6 +292,7 @@ export function PitchGraph(props: Props) {
         staticKey.lo = lo;
         staticKey.hi = hi;
         staticKey.noteLines = p.showNoteLines;
+        staticKey.palette = graphPalette.version;
       }
 
       // Both modes map time to x linearly: x = xScale * time + xOffset.
@@ -361,7 +371,7 @@ export function PitchGraph(props: Props) {
       hasSeen = true;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = BACKGROUND;
+      ctx.fillStyle = graphPalette.background;
       ctx.fillRect(0, 0, width, h);
       ctx.drawImage(staticCanvas, 0, 0, width, h);
 
@@ -390,15 +400,17 @@ export function PitchGraph(props: Props) {
         if (mode.recordingStartAt !== null) {
           // Use the layer's edge time so the line stays glued to the scrolled history.
           const x = width - (liveLayer.t1 - mode.recordingStartAt) * xScale;
-          drawVerticalLine(ctx, x, h, '#ef4444', 2, 0.7, dpr);
+          drawVerticalLine(ctx, x, h, graphPalette.recordLine, 2, 0.7, dpr);
         }
       } else {
         if (mode.beats) drawBeatBands(ctx, mode.beats, t0, t1, xScale, xOffset, width, h);
+        const pen = mode.pen ?? null;
         if (mode.spectrogram) {
-          mode.spectrogram.draw(ctx, t0, t1, xScale, xOffset, lo, hi, h, mode.spectrogramOpacity ?? 0.6);
+          // In pen mode the spectrogram is a guide under the notes you're editing, so keep it faint.
+          const opacity = mode.spectrogramOpacity ?? 0.6;
+          mode.spectrogram.draw(ctx, t0, t1, xScale, xOffset, lo, hi, h, pen ? Math.min(opacity, 0.3) : opacity);
         }
         if (reference) {
-          const pen = mode.pen ?? null;
           drawNotes(
             ctx,
             reference,
@@ -410,9 +422,10 @@ export function PitchGraph(props: Props) {
             hi,
             h,
             width,
-            // In pen mode the notes are what you're working on, so keep them visible.
-            pen ? Math.max(mode.referenceOpacity, 0.35) : mode.referenceOpacity,
+            // In pen mode the notes are what you're working on: draw them solid and outlined.
+            pen ? Math.max(mode.referenceOpacity, 0.85) : mode.referenceOpacity,
             pen?.selectedId ?? null,
+            pen !== null,
           );
         }
         const hasPreview = previewSource !== null && previewT1 > previewT0;
@@ -429,7 +442,7 @@ export function PitchGraph(props: Props) {
           drawPitchLine(ctx, previewSource, previewT0, previewT1, xScale, xOffset, lo, hi, h, p.filter, 0);
         }
         if (mode.beats) drawBeatTicks(ctx, mode.beats, t0, t1, xScale, xOffset, h);
-        drawVerticalLine(ctx, markerX, h, '#94a3b8', 1, 0.7, dpr);
+        drawVerticalLine(ctx, markerX, h, graphPalette.playhead, 1, 0.7, dpr);
       }
 
       if (latestMidi !== null) {
@@ -441,9 +454,9 @@ export function PitchGraph(props: Props) {
           y,
           mode.kind === 'live' ? 5 : 7,
           p.colorizeMarker ? style.shape : 'circle',
-          p.colorizeMarker ? NOTE_FILL[midiToNoteIndex(latestMidi)] : '#0f172a',
+          p.colorizeMarker ? NOTE_FILL[midiToNoteIndex(latestMidi)] : graphPalette.ink,
         );
-        ctx.fillStyle = '#0f172a';
+        ctx.fillStyle = graphPalette.ink;
         ctx.font = 'bold 13px sans-serif';
         ctx.textAlign = 'right';
         ctx.fillText(formatNoteLabel(latestMidi), Math.max(110, markerX - 10), y - 10);
@@ -458,7 +471,7 @@ export function PitchGraph(props: Props) {
         }
         const det = p.engine.detectionsPerSecond;
         ctx.save();
-        ctx.fillStyle = '#0f172a';
+        ctx.fillStyle = graphPalette.ink;
         ctx.font = '12px monospace';
         ctx.textAlign = 'right';
         ctx.fillText(`${fps.value} FPS`, width - 8, 16);
@@ -671,7 +684,7 @@ function drawStaticLayer(
 
   if (showNoteLines) {
     ctx.save();
-    ctx.strokeStyle = '#e2e8f0';
+    ctx.strokeStyle = graphPalette.grid;
     ctx.globalAlpha = 0.4;
     for (let midi = Math.ceil(lo); midi <= hi; midi += 1) {
       if (midiToNoteIndex(midi) === 0) continue;
@@ -685,8 +698,8 @@ function drawStaticLayer(
   }
 
   // Octave lines on every C in range.
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.fillStyle = '#64748b';
+  ctx.strokeStyle = graphPalette.grid;
+  ctx.fillStyle = graphPalette.label;
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'left';
   for (let midi = Math.ceil(lo / 12) * 12; midi <= hi; midi += 12) {
@@ -859,7 +872,7 @@ function drawBeatBands(
   const times = beats.times;
   if (times.length < 2) return;
   ctx.save();
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.045)';
+  ctx.fillStyle = graphPalette.beatBand;
   // Start a group back so a band that began off-screen is still drawn.
   const first = Math.max(0, beats.firstAtOrAfter(t0) - beats.perGroup);
   for (let i = first; i < times.length; i += 1) {
@@ -892,7 +905,7 @@ function drawBeatTicks(
     const x = Math.round(xScale * times[i] + xOffset) + 0.5;
     const major = beats.isGroupStart(i);
     const length = major ? 12 : 6;
-    ctx.strokeStyle = major ? 'rgba(15, 23, 42, 0.55)' : 'rgba(15, 23, 42, 0.3)';
+    ctx.strokeStyle = major ? graphPalette.beatTickMajor : graphPalette.beatTick;
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, length);
@@ -917,6 +930,8 @@ function drawNotes(
   width: number,
   alpha: number,
   selectedId: string | null = null,
+  /** Outline every note (pen mode), not only hand-edited ones. */
+  outlineAll = false,
 ) {
   if (notes.count === 0) return;
   ctx.save();
@@ -937,9 +952,9 @@ function drawNotes(
     ctx.globalAlpha = manual ? manualAlpha : alpha;
     ctx.fillStyle = NOTE_FILL[((note.midi % 12) + 12) % 12];
     ctx.fillRect(x, y, w, barHeight);
-    if (manual) {
-      ctx.globalAlpha = 0.7;
-      ctx.strokeStyle = TAKE_LINE;
+    if (manual || outlineAll) {
+      ctx.globalAlpha = manual ? 0.8 : 0.35;
+      ctx.strokeStyle = graphPalette.ink;
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, y + 0.5, Math.max(1, w - 1), Math.max(1, barHeight - 1));
     }
@@ -948,7 +963,7 @@ function drawNotes(
   if (selected) {
     const box = selected as { x: number; y: number; w: number; h: number };
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = '#0f172a';
+    ctx.strokeStyle = graphPalette.ink;
     ctx.lineWidth = 2;
     ctx.strokeRect(box.x - 1, box.y - 1, box.w + 2, box.h + 2);
   }
@@ -1002,7 +1017,7 @@ function drawPitchLine(
   margin: number,
 ) {
   ctx.save();
-  ctx.strokeStyle = TAKE_LINE;
+  ctx.strokeStyle = graphPalette.takeLine;
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.beginPath();
@@ -1046,6 +1061,7 @@ class LiveLayer {
   private cents = Number.NaN;
   private showTrails = false;
   private trailOpacity = Number.NaN;
+  private palette = -1;
   /** Performance-clock time at the layer's right edge. */
   t1 = Number.NaN;
 
@@ -1079,9 +1095,11 @@ class LiveLayer {
       filter.clarityThreshold !== this.clarity ||
       filter.centsThreshold !== this.cents ||
       showTrails !== this.showTrails ||
-      trailOpacity !== this.trailOpacity;
+      trailOpacity !== this.trailOpacity ||
+      graphPalette.version !== this.palette;
 
     if (changed) {
+      this.palette = graphPalette.version;
       if (pixelWidth !== this.pixelWidth || pixelHeight !== this.pixelHeight) {
         this.front.width = pixelWidth;
         this.front.height = pixelHeight;
