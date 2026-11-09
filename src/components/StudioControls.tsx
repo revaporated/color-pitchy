@@ -22,6 +22,14 @@ type Props = {
   setReferenceOpacity: Dispatch<SetStateAction<number>>;
   syncOffsetMs: number;
   setSyncOffsetMs: Dispatch<SetStateAction<number>>;
+  playReference: boolean;
+  setPlayReference: Dispatch<SetStateAction<boolean>>;
+  referenceVolume: number;
+  setReferenceVolume: Dispatch<SetStateAction<number>>;
+  trackVolume: number;
+  setTrackVolume: Dispatch<SetStateAction<number>>;
+  /** Notes in the reference after filtering, or null before analysis. */
+  referenceNoteCount: number | null;
   reference: ReferenceState;
   onClearTake: () => void;
   onExportTake: () => void;
@@ -50,6 +58,13 @@ export function StudioControls({
   setReferenceSmoothing,
   syncOffsetMs,
   setSyncOffsetMs,
+  playReference,
+  setPlayReference,
+  referenceVolume,
+  setReferenceVolume,
+  trackVolume,
+  setTrackVolume,
+  referenceNoteCount,
   reference,
   onClearTake,
   onExportTake,
@@ -62,7 +77,7 @@ export function StudioControls({
     reference.status === 'analyzing'
       ? `Analyzing track... ${Math.round(reference.progress * 100)}%`
       : reference.status === 'ready'
-        ? 'Reference contour ready'
+        ? `Reference ready (${referenceNoteCount ?? 0} notes)`
         : reference.status === 'error'
           ? `Reference analysis failed: ${reference.message}`
           : 'Load a track to analyze its pitch';
@@ -137,6 +152,45 @@ export function StudioControls({
             <FiRefreshCw /> Re-analyze
           </button>
         )}
+      </label>
+
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={playReference}
+          onChange={(event) => setPlayReference(event.target.checked)}
+        />
+        Play reference as MIDI
+        <InfoTip>
+          Plays the reference notes with a simple synth while the track plays, so you can hear
+          where the analysis is wrong. Turn the track volume down to hear the notes on their own.
+        </InfoTip>
+      </label>
+
+      {playReference && (
+        <label className="slider-row">
+          <span className="slider-row__text">Reference volume: {Math.round(referenceVolume * 100)}%</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={referenceVolume}
+            onChange={(event) => setReferenceVolume(parseFloat(event.target.value))}
+          />
+        </label>
+      )}
+
+      <label className="slider-row">
+        <span className="slider-row__text">Track volume: {Math.round(trackVolume * 100)}%</span>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={trackVolume}
+          onChange={(event) => setTrackVolume(parseFloat(event.target.value))}
+        />
       </label>
 
       <label className="checkbox">

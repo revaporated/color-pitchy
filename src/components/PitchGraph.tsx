@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { MouseEvent, RefObject } from 'react';
 import type { FrameSource } from '../audio/frames';
+import type { NoteSet } from '../audio/noteSet';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import type { PitchEngine } from '../audio/pitchEngine';
 import type { PlaybackClock } from '../audio/playbackClock';
@@ -34,8 +35,8 @@ export type TimelineGraphMode = {
   preview: FrameSource | null;
   /** How many seconds of `preview` to show behind the playhead. */
   previewSeconds: number;
-  reference: FrameSource | null;
-  referenceFilter: DetectionFilter;
+  /** Reference notes, drawn as bars. May overlap (chords, several voices). */
+  reference: NoteSet | null;
   referenceOpacity: number;
   /** The waveform's playhead x (viewport px). The graph draws its playhead there so the two line up exactly. */
   playheadXRef?: RefObject<number | null>;
@@ -86,7 +87,7 @@ type DrawState = {
   mainVersion: number;
   preview: FrameSource | null;
   previewVersion: number;
-  reference: FrameSource | null;
+  reference: NoteSet | null;
   referenceVersion: number;
 };
 
@@ -182,7 +183,6 @@ export function PitchGraph(props: Props) {
     const next = emptyDrawState();
     let hasSeen = false;
     const scratchRuns = new NoteRuns();
-    const referenceCache = new ReferenceRunsCache();
     const liveLayer = new LiveLayer();
     const fps = { last: performance.now(), frames: 0, value: 0 };
 
@@ -247,7 +247,7 @@ export function PitchGraph(props: Props) {
       let previewSource: FrameSource | null = null;
       let previewT0 = 0;
       let previewT1 = 0;
-      let reference: FrameSource | null = null;
+      let reference: NoteSet | null = null;
 
       if (mode.kind === 'live') {
         t1 = mode.frozenAt ?? nowMs / 1000;
@@ -344,8 +344,7 @@ export function PitchGraph(props: Props) {
         }
       } else {
         if (reference) {
-          const runs = referenceCache.get(reference, mode.referenceFilter);
-          drawRuns(ctx, runs, t0, t1, xScale, xOffset, lo, hi, h, width, mode.referenceOpacity);
+          drawNotes(ctx, reference, t0, t1, xScale, xOffset, lo, hi, h, width, mode.referenceOpacity);
         }
         const hasPreview = previewSource !== null && previewT1 > previewT0;
         if (p.showNoteTrails) {
@@ -609,39 +608,38 @@ function drawRuns(
   ctx.restore();
 }
 
-/**
- * The reference contour never changes while the track is loaded, so its runs
- * are built once (and again only when the reference filter or range changes)
- * instead of re-filtering every visible bin on every frame.
- */
-class ReferenceRunsCache {
-  private readonly runs = new NoteRuns();
-  private source: FrameSource | null = null;
-  private version = -1;
-  private clarity = Number.NaN;
-  private cents = Number.NaN;
-  private minMidi = Number.NaN;
-  private maxMidi = Number.NaN;
-
-  get(source: FrameSource, filter: DetectionFilter) {
-    if (
-      source !== this.source ||
-      source.version !== this.version ||
-      filter.clarityThreshold !== this.clarity ||
-      filter.centsThreshold !== this.cents ||
-      filter.minMidi !== this.minMidi ||
-      filter.maxMidi !== this.maxMidi
-    ) {
-      collectRuns(source, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY, filter, this.runs);
-      this.source = source;
-      this.version = source.version;
-      this.clarity = filter.clarityThreshold;
-      this.cents = filter.centsThreshold;
-      this.minMidi = filter.minMidi;
-      this.maxMidi = filter.maxMidi;
+/** Note bars, which (unlike runs) may overlap. */
+function drawNotes(
+  ctx: CanvasRenderingContext2D,
+  notes: NoteSet,
+  t0: number,
+  t1: number,
+  xScale: number,
+  xOffset: number,
+  lo: number,
+  hi: number,
+  h: number,
+  width: number,
+  alpha: number,
+) {
+  if (notes.count === 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  let currentFill = -1;
+  notes.forEachOverlapping(t0 - 2 / xScale, t1, (note) => {
+    const left = Math.max(0, xScale * note.start + xOffset);
+    const right = Math.min(width, xScale * note.end + xOffset);
+    if (right <= 0 || left >= width) return;
+    const top = mapMidiToY(note.midi + 0.5, h, lo, hi);
+    const bottom = mapMidiToY(note.midi - 0.5, h, lo, hi);
+    const fill = ((note.midi % 12) + 12) % 12;
+    if (fill !== currentFill) {
+      ctx.fillStyle = NOTE_FILL[fill];
+      currentFill = fill;
     }
-    return this.runs;
-  }
+    ctx.fillRect(left, Math.min(top, bottom), Math.max(2, right - left), Math.abs(bottom - top));
+  });
+  ctx.restore();
 }
 
 const lineState = {

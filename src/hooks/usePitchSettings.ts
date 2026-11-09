@@ -95,6 +95,10 @@ export function useStudioSettings(initial: ProjectSettings) {
   const [recordTake, setRecordTake] = usePersistentState('studio.recordTake', false);
   const [onlyWhilePlaying, setOnlyWhilePlaying] = usePersistentState('studio.onlyWhilePlaying', true);
   const [syncOffsetMs, setSyncOffsetMs] = usePersistentState('studio.syncOffsetMs', 0);
+  // Listening preferences, so global rather than per project.
+  const [playReference, setPlayReference] = usePersistentState('studio.playReference', false);
+  const [referenceVolume, setReferenceVolume] = usePersistentState('studio.referenceVolume', 0.5);
+  const [trackVolume, setTrackVolume] = usePersistentState('studio.trackVolume', 1);
 
   const [showReference, setShowReference] = useState(initial.showReference);
   const [referenceClarity, setReferenceClarity] = useState(initial.referenceClarity);
@@ -125,5 +129,11 @@ export function useStudioSettings(initial: ProjectSettings) {
     setReferenceSmoothing,
     syncOffsetMs,
     setSyncOffsetMs,
+    playReference,
+    setPlayReference,
+    referenceVolume,
+    setReferenceVolume,
+    trackVolume,
+    setTrackVolume,
   };
 }

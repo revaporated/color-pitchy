@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PitchTrack } from '../audio/frames';
+import { NoteSet } from '../audio/noteSet';
+import { ReferencePlayer } from '../audio/referencePlayer';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
 import { PlaybackClock } from '../audio/playbackClock';
 import { AudioUpload } from '../components/AudioUpload';
@@ -173,6 +175,11 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   // Sync the clock once per frame, before the waveform and graph read it.
   useEffect(() => onAnimationFrame(() => clock.sync(), FRAME_ORDER.clock), [clock]);
 
+  // Track volume (lets you mute the song to hear the reference on its own).
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = studio.trackVolume;
+  }, [audioRef, studio.trackVolume, audioUrl]);
+
   // `take` keeps what you record. `preview` always follows the mic while the
   // track plays and is drawn as a short trail behind the playhead when you
   // aren't recording; it's cleared on every seek so it only shows this pass.
@@ -224,6 +231,10 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     if (audio) await clearReferences(audio.id).catch(() => undefined);
     setAnalysisToken((value) => value + 1);
   };
+  const [referencePlayer] = useState(() => new ReferencePlayer(clock));
+  useEffect(() => () => referencePlayer.dispose(), [referencePlayer]);
+  useEffect(() => referencePlayer.setVolume(studio.referenceVolume), [referencePlayer, studio.referenceVolume]);
+
   const referenceFilter: DetectionFilter = useMemo(
     () => ({
       clarityThreshold: studio.referenceClarity,
@@ -233,6 +244,26 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     }),
     [studio.referenceClarity, filter.minMidi, filter.maxMidi],
   );
+
+  // The reference as notes: what the graph draws, the player plays and the
+  // MIDI export writes. A tracked top-voice contour is already smooth, so it
+  // skips the median filter and keeps shorter notes.
+  const trackedReference = studio.topVoiceReference && studio.referenceSmoothing > 0;
+  const referenceNotes = useMemo(
+    () =>
+      reference.track
+        ? NoteSet.fromContour(reference.track, duration, referenceFilter, {
+            medianWindow: trackedReference ? 1 : 5,
+            minDuration: trackedReference ? 0.05 : 0.08,
+          })
+        : null,
+    [reference.track, duration, referenceFilter, trackedReference],
+  );
+  useEffect(() => referencePlayer.setNotes(referenceNotes), [referencePlayer, referenceNotes]);
+  useEffect(() => {
+    referencePlayer.setEnabled(studio.playReference && hasAudio);
+    return () => referencePlayer.setEnabled(false);
+  }, [referencePlayer, studio.playReference, hasAudio]);
 
   // Write mic frames onto the take at the song position they were sung at.
   const recordingRef = useRef(false);
@@ -400,15 +431,13 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   };
 
   const exportReference = () => {
-    if (!reference.track) return;
-    const notes = segmentNotes(collectPitches(reference.track, 0, duration, referenceFilter), {
-      minDuration: 0.08,
-    });
+    if (!referenceNotes) return;
+    const notes = referenceNotes.notes;
     if (notes.length === 0) {
       window.alert('No reference notes pass the current reference clarity.');
       return;
     }
-    downloadBytes(buildMidiFile(notes), `${baseName}-reference.mid`);
+    downloadBytes(buildMidiFile([...notes]), `${baseName}-reference.mid`);
   };
 
   return (
@@ -428,8 +457,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
             take,
             preview: studio.recordTake ? null : preview,
             previewSeconds: controls.historyDuration,
-            reference: studio.showReference ? reference.track : null,
-            referenceFilter,
+            reference: studio.showReference ? referenceNotes : null,
             referenceOpacity: studio.referenceOpacity,
             playheadXRef,
             showLiveMarker: armed && detectionActive,
@@ -513,6 +541,13 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         setReferenceOpacity={studio.setReferenceOpacity}
         syncOffsetMs={studio.syncOffsetMs}
         setSyncOffsetMs={studio.setSyncOffsetMs}
+        playReference={studio.playReference}
+        setPlayReference={studio.setPlayReference}
+        referenceVolume={studio.referenceVolume}
+        setReferenceVolume={studio.setReferenceVolume}
+        trackVolume={studio.trackVolume}
+        setTrackVolume={studio.setTrackVolume}
+        referenceNoteCount={referenceNotes?.count ?? null}
         reference={reference}
         onClearTake={clearTake}
         onExportTake={exportTake}

@@ -45,6 +45,11 @@ export class PlaybackClock {
     return this.playing;
   }
 
+  /** Song seconds per real second. */
+  get playbackRate() {
+    return this.rate;
+  }
+
   hardSync() {
     const audio = this.audio;
     const now = performance.now();
