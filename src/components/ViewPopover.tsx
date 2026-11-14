@@ -4,6 +4,7 @@ import type { SpectrogramView } from '../audio/spectrogramImage';
 import { InfoTip } from './InfoTip';
 import { Popover } from './Popover';
 import { Stepper } from './Stepper';
+import { midiToNoteName } from '../utils/pitch';
 
 type Props = {
   showReference: boolean;
@@ -29,7 +30,21 @@ type Props = {
   setShowNoteLines: Dispatch<SetStateAction<boolean>>;
   colorizeMarker: boolean;
   setColorizeMarker: Dispatch<SetStateAction<boolean>>;
+  graphMinMidi: number;
+  setGraphMinMidi: Dispatch<SetStateAction<number>>;
+  graphMaxMidi: number;
+  setGraphMaxMidi: Dispatch<SetStateAction<number>>;
 };
+
+/** C1 to C8. */
+const RANGE_NOTES = Array.from({ length: 108 - 24 + 1 }, (_, i) => 24 + i);
+/** Keep at least an octave on the graph. */
+const MIN_SPAN = 12;
+
+function noteLabel(midi: number) {
+  const { note, octave } = midiToNoteName(midi);
+  return `${note}${octave}`;
+}
 
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 
@@ -173,6 +188,42 @@ export function ViewPopover(props: Props) {
             onChange={(event) => props.setColorizeMarker(event.target.checked)}
           />
           Color the live pitch marker
+        </label>
+      </div>
+      <div className="view-popover__layer">
+        <label className="inline-field">
+          <span>
+            Graph range{' '}
+            <InfoTip>
+              The notes the pitch graph shows, bottom to top. It doesn't change what is detected or analyzed:
+              the mic uses Min and Max detect, and the reference uses the analysis note range.
+            </InfoTip>
+          </span>
+          <span className="analysis-panel__choices">
+            <select
+              aria-label="Lowest note on the graph"
+              value={props.graphMinMidi}
+              onChange={(event) => props.setGraphMinMidi(parseInt(event.target.value, 10))}
+            >
+              {RANGE_NOTES.filter((m) => m <= props.graphMaxMidi - MIN_SPAN).map((m) => (
+                <option key={m} value={m}>
+                  {noteLabel(m)}
+                </option>
+              ))}
+            </select>
+            to
+            <select
+              aria-label="Highest note on the graph"
+              value={props.graphMaxMidi}
+              onChange={(event) => props.setGraphMaxMidi(parseInt(event.target.value, 10))}
+            >
+              {RANGE_NOTES.filter((m) => m >= props.graphMinMidi + MIN_SPAN).map((m) => (
+                <option key={m} value={m}>
+                  {noteLabel(m)}
+                </option>
+              ))}
+            </select>
+          </span>
         </label>
       </div>
     </Popover>

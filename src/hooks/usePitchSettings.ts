@@ -96,7 +96,7 @@ export function usePitchSettings() {
  * the open project (they depend on the song) and live in its store; the rest
  * depend on your setup and are global.
  */
-export function useStudioSettings(store: ProjectStore) {
+export function useStudioSettings(store: ProjectStore, micRange: { minMidi: number; maxMidi: number }) {
   const [recordTake, setRecordTake] = usePersistentState('studio.recordTake', false);
   const [onlyWhilePlaying, setOnlyWhilePlaying] = usePersistentState('studio.onlyWhilePlaying', true);
   const [syncOffsetMs, setSyncOffsetMs] = usePersistentState('studio.syncOffsetMs', 0);
@@ -112,6 +112,9 @@ export function useStudioSettings(store: ProjectStore) {
   const [snapLoopToBeats, setSnapLoopToBeats] = usePersistentState('studio.snapLoopToBeats', true);
   const [metronome, setMetronome] = usePersistentState('studio.metronome', false);
   const [metronomeVolume, setMetronomeVolume] = usePersistentState('studio.metronomeVolume', 0.6);
+  // The graph's pitch axis. Starts at the mic range the first time, then is its own setting.
+  const [graphMinMidi, setGraphMinMidi] = usePersistentState('studio.graphMinMidi', micRange.minMidi);
+  const [graphMaxMidi, setGraphMaxMidi] = usePersistentState('studio.graphMaxMidi', micRange.maxMidi);
 
   // Per project: they depend on the song.
   const { settings } = useProjectState(store);
@@ -183,6 +186,10 @@ export function useStudioSettings(store: ProjectStore) {
     setMetronome,
     metronomeVolume,
     setMetronomeVolume,
+    graphMinMidi,
+    setGraphMinMidi,
+    graphMaxMidi,
+    setGraphMaxMidi,
     beatScale,
     beatsPerGroup: settings.beatsPerGroup,
     beatOffset: settings.beatOffset,

@@ -114,9 +114,9 @@ row('runs <= 30 ms', voiced.filter(([, n]) => n <= 3).length, 183);
 row('A-B-A flips', flips, 12);
 row('runs >= 100 ms', voiced.filter(([, n]) => n >= 10).length, 987);
 
-// Notes as Studio builds them (reference clarity 0.8, graph range C2-C7).
+// Notes as Studio builds them (reference clarity 0.8, the analysis range plus a quarter tone).
 const track = PitchTrack.fromArrays(frequency, clarity, gridHz);
-const noteSet = NoteSet.fromContour(track, duration, { clarityThreshold: 0.8, centsThreshold: 50, minMidi: 36, maxMidi: 96 }, { medianWindow: 1, minDuration: 0.05 });
+const noteSet = NoteSet.fromContour(track, duration, { clarityThreshold: 0.8, centsThreshold: 50, minMidi: settings.minMidi - 0.5, maxMidi: settings.maxMidi + 0.5 }, { medianWindow: 1, minDuration: 0.05 });
 const notes = noteSet.notes;
 const lengths = notes.map((n: any) => n.end - n.start).sort((a: number, b: number) => a - b);
 log('notes');

@@ -10,16 +10,17 @@ export function useReferenceNotes(
   duration: number,
   analysis: AnalysisSettings,
   studio: { referenceClarity: number },
-  filter: DetectionFilter,
 ) {
   const referenceFilter: DetectionFilter = useMemo(
     () => ({
       clarityThreshold: studio.referenceClarity,
       centsThreshold: 50, // recorded performances drift; don't cents-gate the reference
-      minMidi: filter.minMidi,
-      maxMidi: filter.maxMidi,
+      // The analysis's own range (it allows a quarter tone past each end),
+      // not the mic's: the reference is the track, not your voice.
+      minMidi: analysis.minMidi - 0.5,
+      maxMidi: analysis.maxMidi + 0.5,
     }),
-    [studio.referenceClarity, filter.minMidi, filter.maxMidi],
+    [studio.referenceClarity, analysis.minMidi, analysis.maxMidi],
   );
 
   // The reference as notes: what the graph draws, the player plays and the

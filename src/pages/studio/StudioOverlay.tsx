@@ -14,8 +14,8 @@ type Props = {
   analyze: (settings: AnalysisSettings) => Promise<void>;
 };
 
-/** What the graph says when there's nothing to show yet, or null. */
-export function studioOverlay({ hasAudio, trackError, chooseFile, hasTrack, reference, needsAnalysis, studio, analysis, analyze }: Props): ReactNode {
+/** What the graph says when there's nothing to show yet (renders nothing otherwise). */
+export function StudioOverlay({ hasAudio, trackError, chooseFile, hasTrack, reference, needsAnalysis, studio, analysis, analyze }: Props): ReactNode {
   let overlay: ReactNode = null;
   if (!hasAudio && trackError) {
     overlay = (
@@ -58,5 +58,12 @@ export function studioOverlay({ hasAudio, trackError, chooseFile, hasTrack, refe
     );
   }
 
-  return overlay;
+  if (!overlay) return null;
+  return (
+    <div className="graph-overlay">
+      <div className="graph-overlay__box" role="status">
+        {overlay}
+      </div>
+    </div>
+  );
 }

@@ -4,6 +4,7 @@ import { FiEdit2 } from 'react-icons/fi';
 import { Link, useParams } from 'react-router-dom';
 import { applyEdits, EMPTY_EDITS, hasEdits, newManualId, updateNote } from '../audio/noteEdits';
 import { SpectrogramImage } from '../audio/spectrogramImage';
+import { TimelineView } from '../audio/timelineView';
 import { ReferencePlayer } from '../audio/referencePlayer';
 import { BeatControls } from '../components/BeatControls';
 import { EngineStats } from '../components/EngineStats';
@@ -37,9 +38,8 @@ import {
   updateProject,
 } from '../storage/projects';
 import type { AudioRecord, ProjectMeta, TakeRecord } from '../storage/projects';
-import { PIXELS_PER_SECOND } from '../utils/waveform';
 import { StudioMenu } from './studio/StudioMenu';
-import { studioOverlay } from './studio/StudioOverlay';
+import { StudioOverlay } from './studio/StudioOverlay';
 import { useLoopSelection } from './studio/useLoopSelection';
 import { usePenOptions } from './studio/usePenOptions';
 import { usePlaybackClock } from './studio/usePlaybackClock';
@@ -132,7 +132,9 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   const { controls, filter } = usePitchSettings();
   // Settings, note edits and beats of this project: one store, one save.
   const store = useProjectStore(project);
-  const studio = useStudioSettings(store);
+  const studio = useStudioSettings(store, { minMidi: controls.minDetectableNote, maxMidi: controls.maxDetectableNote });
+  const { graphMinMidi, graphMaxMidi } = studio;
+  const graphRange = useMemo(() => ({ minMidi: graphMinMidi, maxMidi: graphMaxMidi }), [graphMinMidi, graphMaxMidi]);
 
   const [audio, setAudio] = useState<AudioRecord | null>(initialAudio);
   // The saved take to restore once the track has decoded (null after a track change).
@@ -209,7 +211,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     [referencePlayer, studio.metronomeVolume],
   );
 
-  const { referenceFilter, autoNotes } = useReferenceNotes(reference, duration, analysis, studio, filter);
+  const { referenceFilter, autoNotes } = useReferenceNotes(reference, duration, analysis, studio);
 
   // Pen mode: your edits sit on top of the analysis (see noteEdits.ts), so
   // re-analyzing replaces the auto notes but keeps what you changed by hand.
@@ -241,8 +243,8 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   }, [referencePlayer, beatGrid, studio.metronome, hasAudio]);
 
   // Waveform view state
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const playheadXRef = useRef<number | null>(null);
+  // The time axis the waveform and the graph share.
+  const [timeline] = useState(() => new TimelineView());
   const viewMode = tool === 'select' ? 'select' : 'pan';
   const [panMode, setPanMode] = useState<'scroll' | 'scrub'>('scroll');
   const hoverTimeRef = useRef<number | null>(null);
@@ -303,7 +305,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
         setUploadError(`Couldn't save the track: ${String(err)}`);
       }
     },
-    [projectId, setError, stop, take, currentEdits, resetEdits],
+    [projectId, setError, stop, take, currentEdits, resetEdits, setSelection, setLoopEnabled],
   );
 
   // Take / reference actions
@@ -405,17 +407,6 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     nudgeSelected,
   });
 
-  const overlay = studioOverlay({
-    hasAudio,
-    trackError,
-    chooseFile,
-    hasTrack: audio !== null,
-    reference,
-    needsAnalysis,
-    studio,
-    analysis,
-    analyze,
-  });
 
   const trackSummary = fileName
     ? `${fileName}${
@@ -470,6 +461,10 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
       setShowNoteLines={controls.setShowNoteLines}
       colorizeMarker={controls.colorizeMarker}
       setColorizeMarker={controls.setColorizeMarker}
+      graphMinMidi={studio.graphMinMidi}
+      setGraphMinMidi={studio.setGraphMinMidi}
+      graphMaxMidi={studio.graphMaxMidi}
+      setGraphMaxMidi={studio.setGraphMaxMidi}
     />
   );
 
@@ -537,8 +532,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
               className={`studio-graph${penMode ? ' studio-graph--pen' : ''}`}
               mode={{
                 kind: 'timeline',
-                viewportRef,
-                pixelsPerSecond: PIXELS_PER_SECOND,
+                view: timeline,
                 clock,
                 take,
                 preview: studio.recordTake ? null : preview,
@@ -549,11 +543,13 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
                 beats: studio.showBeats ? beatGrid : null,
                 spectrogramOpacity: studio.spectrogramOpacity,
                 referenceOpacity: studio.referenceOpacity,
-                playheadXRef,
+                selection,
+                onSelect: tool === 'select' && hasAudio ? handleSelectionChange : undefined,
                 showLiveMarker: armed && detectionActive,
               }}
               engine={engine}
               filter={filter}
+              range={graphRange}
               colorizeMarker={controls.colorizeMarker}
               showNoteLines={controls.showNoteLines}
               showNoteTrails={controls.showNoteTrails}
@@ -567,13 +563,17 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
                 <FiEdit2 aria-hidden="true" /> Pen: click to add, drag to move, right-click to delete
               </span>
             )}
-            {overlay && (
-              <div className="graph-overlay">
-                <div className="graph-overlay__box" role="status">
-                  {overlay}
-                </div>
-              </div>
-            )}
+            <StudioOverlay
+              hasAudio={hasAudio}
+              trackError={trackError}
+              chooseFile={chooseFile}
+              hasTrack={audio !== null}
+              reference={reference}
+              needsAnalysis={needsAnalysis}
+              studio={studio}
+              analysis={analysis}
+              analyze={analyze}
+            />
           </div>
 
           <WaveformViewer
@@ -587,8 +587,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
             hoverTimeRef={hoverTimeRef}
             viewMode={viewMode}
             panMode={panMode}
-            viewportRef={viewportRef}
-            playheadXRef={playheadXRef}
+            view={timeline}
             selection={selection}
             onSelectionChange={handleSelectionChange}
           />

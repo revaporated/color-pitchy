@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, PointerEvent } from 'react';
 import type { FrameSource } from '../audio/frames';
 import type { NoteSet } from '../audio/noteSet';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
@@ -8,7 +8,7 @@ import { formatNoteLabel, frameToMidi, midiToNoteIndex, PITCH_COLOR_SHAPE_MAP, t
 import { PLAYHEAD_WIDTH } from '../utils/waveform';
 import { graphPalette, subscribeTheme } from '../theme';
 import { drawBeatBands, drawBeatTicks } from './pitchGraph/beatsLayer';
-import { drawMarker, drawVerticalLine, MAX_GAP_SECONDS, mapMidiToY, NOTE_FILL } from './pitchGraph/draw';
+import { drawMarker, drawSelectionBand, drawVerticalLine, MAX_GAP_SECONDS, mapMidiToY, NOTE_FILL } from './pitchGraph/draw';
 import { drawStaticLayer } from './pitchGraph/gridLayer';
 import { LiveLayer } from './pitchGraph/liveLayer';
 import { drawNotes } from './pitchGraph/notesLayer';
@@ -28,6 +28,8 @@ type Props = {
   showNoteTrails: boolean;
   trailOpacity: number;
   showDiagnostics: boolean;
+  /** Pitch range of the vertical axis. Defaults to the filter's range (Live). */
+  range?: { minMidi: number; maxMidi: number };
   height?: number;
   /** Timeline only: clicking the graph seeks here (seconds). */
   onSeek?: (time: number) => void;
@@ -178,8 +180,9 @@ export function PitchGraph(props: Props) {
         canvasDpr = dpr;
       }
 
-      const lo = p.filter.minMidi;
-      const hi = Math.max(p.filter.maxMidi, lo + 1);
+      const axis = p.range ?? p.filter;
+      const lo = axis.minMidi;
+      const hi = Math.max(axis.maxMidi, lo + 1);
 
       // Grid lines change rarely; cache them on an offscreen canvas.
       if (
@@ -230,15 +233,15 @@ export function PitchGraph(props: Props) {
         showMarker = mode.frozenAt === null;
         mainSource = mode.source;
       } else {
-        const scrollLeft = mode.viewportRef.current?.scrollLeft ?? 0;
-        xScale = mode.pixelsPerSecond;
+        const scrollLeft = mode.view.scrollLeft;
+        xScale = mode.view.pixelsPerSecond;
         xOffset = -scrollLeft;
         t0 = scrollLeft / xScale;
         t1 = (scrollLeft + width) / xScale;
         const songNow = mode.clock.songTimeAt(nowMs);
         // Use the waveform's playhead position (it runs earlier in the same frame)
         // so both playheads are the same pixel. Fall back when there's no waveform.
-        const sharedX = mode.playheadXRef?.current;
+        const sharedX = mode.view.playheadX;
         markerX =
           sharedX != null
             ? sharedX
@@ -322,6 +325,7 @@ export function PitchGraph(props: Props) {
           const opacity = mode.spectrogramOpacity ?? 0.6;
           mode.spectrogram.draw(ctx, t0, t1, xScale, xOffset, lo, hi, h, pen ? Math.min(opacity, 0.3) : opacity);
         }
+        if (mode.selection) drawSelectionBand(ctx, mode.selection, xScale, xOffset, width, h);
         if (reference) {
           drawNotes(
             ctx,
@@ -402,22 +406,64 @@ export function PitchGraph(props: Props) {
     sizeRef,
   );
 
+  // Select tool: drag across the graph to select a passage, as on the waveform.
+  const selectDrag = useRef<{ pointerId: number; anchor: number; downX: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+  const startSelect = (event: PointerEvent<HTMLDivElement>) => {
+    const { mode } = propsRef.current;
+    if (mode.kind !== 'timeline' || !mode.onSelect || mode.pen || event.button !== 0) return;
+    const x = event.clientX - event.currentTarget.getBoundingClientRect().left;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    selectDrag.current = { pointerId: event.pointerId, anchor: mode.view.clampedTimeAt(x), downX: event.clientX, moved: false };
+  };
+  const moveSelect = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = selectDrag.current;
+    const { mode } = propsRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || mode.kind !== 'timeline' || !mode.onSelect) return;
+    if (!drag.moved && Math.abs(event.clientX - drag.downX) < 2) return;
+    drag.moved = true;
+    const x = event.clientX - event.currentTarget.getBoundingClientRect().left;
+    mode.onSelect({ start: drag.anchor, end: mode.view.clampedTimeAt(x) });
+  };
+  const endSelect = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = selectDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    selectDrag.current = null;
+    // A drag ends in a click; don't let it seek.
+    if (drag.moved) suppressClick.current = true;
+  };
+
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
     const { mode, onSeek } = propsRef.current;
     if (mode.kind !== 'timeline' || !onSeek || mode.pen) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const scrollLeft = mode.viewportRef.current?.scrollLeft ?? 0;
-    onSeek(Math.max(0, (scrollLeft + event.clientX - rect.left) / mode.pixelsPerSecond));
+    onSeek(Math.max(0, mode.view.xToTime(event.clientX - rect.left)));
   };
 
   return (
     <div
       className={`pitch-graph${className ? ` ${className}` : ''}`}
       onClick={handleClick}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={(event) => finishDrag(event, false)}
-      onPointerCancel={(event) => finishDrag(event, true)}
+      onPointerDown={(event) => {
+        handlePointerDown(event);
+        startSelect(event);
+      }}
+      onPointerMove={(event) => {
+        handlePointerMove(event);
+        moveSelect(event);
+      }}
+      onPointerUp={(event) => {
+        finishDrag(event, false);
+        endSelect(event);
+      }}
+      onPointerCancel={(event) => {
+        finishDrag(event, true);
+        endSelect(event);
+      }}
       onPointerLeave={(event) => {
         if (!penDrag.current) event.currentTarget.style.cursor = '';
       }}

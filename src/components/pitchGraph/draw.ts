@@ -51,3 +51,24 @@ export function drawMarker(
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fill();
 }
+
+/** Same color as the waveform's selection (`.waveform-selection` in index.css). */
+const SELECTION_FILL = 'rgba(148, 197, 255, 0.18)';
+
+/** The selected passage as a full-height band. */
+export function drawSelectionBand(
+  ctx: CanvasRenderingContext2D,
+  selection: { start: number; end: number },
+  xScale: number,
+  xOffset: number,
+  width: number,
+  h: number,
+) {
+  const left = Math.max(0, xScale * Math.min(selection.start, selection.end) + xOffset);
+  const right = Math.min(width, xScale * Math.max(selection.start, selection.end) + xOffset);
+  if (right <= left) return;
+  ctx.save();
+  ctx.fillStyle = SELECTION_FILL;
+  ctx.fillRect(left, 0, right - left, h);
+  ctx.restore();
+}

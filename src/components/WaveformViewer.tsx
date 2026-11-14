@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop'
 import type { PlaybackClock } from '../audio/playbackClock'
+import type { TimelineView } from '../audio/timelineView'
 import {
   PIXELS_PER_SECOND,
   PLAYHEAD_WIDTH,
@@ -63,10 +64,8 @@ type Props = {
   clock?: PlaybackClock
   viewMode: 'pan' | 'select'
   panMode?: 'scroll' | 'scrub'
-  /** Lets a sibling (the Studio pitch graph) read this viewport's scroll position. */
-  viewportRef?: RefObject<HTMLDivElement | null>
-  /** Written with the playhead's x within the viewport, so the pitch graph draws its line at the same spot. */
-  playheadXRef?: RefObject<number | null>
+  /** The shared time axis. This viewer writes its scroll, size and playhead x there for the pitch graph. */
+  view: TimelineView
   selection: { start: number; end: number } | null
   onSelectionChange: (selection: { start: number; end: number } | null) => void
 }
@@ -83,8 +82,7 @@ export const WaveformViewer = ({
   clock,
   viewMode,
   panMode = 'scroll',
-  viewportRef: externalViewportRef,
-  playheadXRef,
+  view,
   selection,
   onSelectionChange,
 }: Props) => {
@@ -93,14 +91,21 @@ export const WaveformViewer = ({
   const hoverOffsetRef = useRef<number | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
 
-  // Expose the scroll container to the parent (the Studio pitch graph reads its scrollLeft).
-  useLayoutEffect(() => {
-    if (!externalViewportRef) return
-    externalViewportRef.current = viewportRef.current
+  // Keep the shared timeline view in step with this viewport's scroll and size.
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const sync = () => view.setViewport(viewport.scrollLeft, viewport.clientWidth)
+    sync()
+    viewport.addEventListener('scroll', sync, { passive: true })
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null
+    observer?.observe(viewport)
     return () => {
-      externalViewportRef.current = null
+      viewport.removeEventListener('scroll', sync)
+      observer?.disconnect()
     }
-  }, [externalViewportRef])
+  }, [view])
+
   const dragRef = useRef<
     | {
         type: 'pan-scroll'
@@ -140,6 +145,10 @@ export const WaveformViewer = ({
   const waveformWidth = peaks?.length ?? 0
   const tileCount = Math.ceil(waveformWidth / TILE_WIDTH)
   const hasWaveform = Boolean(peaks)
+
+  useEffect(() => {
+    view.setContent(waveformWidth, duration)
+  }, [view, waveformWidth, duration])
 
   // Only the tiles (and second markers) around the viewport are mounted: the
   // visible ones plus one tile either side. Updated from scroll events, and only
@@ -274,11 +283,9 @@ export const WaveformViewer = ({
       const viewport = viewportRef.current
       if (!viewport || waveformWidth === 0) return
 
-      const viewportWidth = viewport.clientWidth
-      const targetLeft = time * PIXELS_PER_SECOND - viewportWidth / 2
-      const maxScroll = Math.max(0, waveformWidth - viewportWidth)
-      const clamped = Math.max(0, Math.min(targetLeft, maxScroll))
-
+      view.setViewport(viewport.scrollLeft, viewport.clientWidth)
+      view.setContent(waveformWidth, duration)
+      const clamped = view.centeredScroll(time)
       const shouldKeepScroll =
         isUserInteractingRef.current && viewMode === 'pan' && panMode === 'scroll'
       if (!shouldKeepScroll) {
@@ -287,25 +294,21 @@ export const WaveformViewer = ({
       // The browser rounds scrollLeft to whole (device) pixels, so the scroll it
       // actually applied can differ from `clamped` by a fraction of a pixel.
       const appliedScrollLeft = viewport.scrollLeft
+      view.setViewport(appliedScrollLeft, viewport.clientWidth)
       // Place the playhead from the scroll we asked for, so while following it
-      // sits exactly at the center instead of wobbling with that rounding...
+      // sits exactly at the center instead of wobbling with that rounding.
       const desiredScrollLeft = shouldKeepScroll ? appliedScrollLeft : clamped
-      const rawPlayheadLeft = time * PIXELS_PER_SECOND - desiredScrollLeft
-      const maxPlayheadLeft = Math.max(0, viewportWidth - PLAYHEAD_WIDTH)
-      const dpr = window.devicePixelRatio || 1
-      // ...snapped to a device pixel so it never straddles two pixels...
-      const playheadLeft =
-        Math.round(Math.max(0, Math.min(rawPlayheadLeft, maxPlayheadLeft)) * dpr) / dpr
-      if (playheadXRef) playheadXRef.current = playheadLeft
+      const playheadLeft = view.playheadXFor(time, desiredScrollLeft, window.devicePixelRatio || 1, PLAYHEAD_WIDTH)
+      view.setPlayheadX(playheadLeft)
       const playhead = playheadRef.current
       if (playhead) {
-        // ...and offset by the scroll that was really applied, since it lives inside the scrolled content.
+        // Offset by the scroll that was really applied, since it lives inside the scrolled content.
         playhead.style.transform = `translateX(${playheadLeft + appliedScrollLeft}px)`
       }
 
       updateHoverLine()
     },
-    [panMode, playheadXRef, updateHoverLine, viewMode, waveformWidth],
+    [duration, panMode, updateHoverLine, view, viewMode, waveformWidth],
   )
 
   useEffect(() => {
@@ -500,6 +503,7 @@ export const WaveformViewer = ({
       const maxScroll = Math.max(0, waveformWidth - viewport.clientWidth)
       const nextScroll = Math.max(0, Math.min(dragState.startScrollLeft - deltaX, maxScroll))
       viewport.scrollLeft = nextScroll
+      view.setViewport(viewport.scrollLeft, viewport.clientWidth)
       updateHoverLine()
       return
     }

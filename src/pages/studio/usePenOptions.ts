@@ -47,6 +47,7 @@ export function usePenOptions(
     };
   }, [
     penMode,
+    setSelectedNoteId,
     noteEdits.loaded,
     hasAudio,
     selectedNoteId,

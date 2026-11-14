@@ -1,10 +1,10 @@
-import type { RefObject } from 'react';
 import type { BeatGrid } from '../../audio/beatGrid';
 import type { FrameSource } from '../../audio/frames';
 import type { NoteSpan } from '../../audio/noteEdits';
 import type { NoteSet, RefNote } from '../../audio/noteSet';
 import type { PlaybackClock } from '../../audio/playbackClock';
 import type { SpectrogramImage } from '../../audio/spectrogramImage';
+import type { TimelineView } from '../../audio/timelineView';
 
 /** Live: a rolling window ending "now" on the performance clock. */
 export type LiveGraphMode = {
@@ -19,8 +19,8 @@ export type LiveGraphMode = {
 /** Timeline: x axis is song time, scrolled in lockstep with the waveform viewport. */
 export type TimelineGraphMode = {
   kind: 'timeline';
-  viewportRef: RefObject<HTMLDivElement | null>;
-  pixelsPerSecond: number;
+  /** The time axis shared with the waveform (scroll, scale, playhead x). */
+  view: TimelineView;
   clock: PlaybackClock;
   take: FrameSource;
   /** Recent mic pitch shown behind the playhead when not recording a take. */
@@ -30,8 +30,10 @@ export type TimelineGraphMode = {
   /** Reference notes, drawn as bars. May overlap (chords, several voices). */
   reference: NoteSet | null;
   referenceOpacity: number;
-  /** The waveform's playhead x (viewport px). The graph draws its playhead there so the two line up exactly. */
-  playheadXRef?: RefObject<number | null>;
+  /** The selected passage, shaded on the graph. */
+  selection?: { start: number; end: number } | null;
+  /** Select tool: dragging across the graph selects a passage. Undefined when the tool is off. */
+  onSelect?: (selection: { start: number; end: number }) => void;
   /** Draw the current mic pitch at the playhead. */
   showLiveMarker: boolean;
   /** Beat ticks and alternating group shading. Null when off. */

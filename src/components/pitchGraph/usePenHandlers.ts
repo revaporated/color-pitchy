@@ -32,7 +32,11 @@ type PenDrag = {
  * Reads the graph's latest props from `propsRef`, so the handlers never go stale.
  */
 export function usePenHandlers(
-  propsRef: RefObject<{ mode: LiveGraphMode | TimelineGraphMode; filter: DetectionFilter }>,
+  propsRef: RefObject<{
+    mode: LiveGraphMode | TimelineGraphMode;
+    filter: DetectionFilter;
+    range?: { minMidi: number; maxMidi: number };
+  }>,
   canvasRef: RefObject<HTMLCanvasElement | null>,
   sizeRef: RefObject<{ width: number; height: number }>,
 ) {
@@ -40,23 +44,24 @@ export function usePenHandlers(
 
   /** Song time, semitone and pixel position under the pointer (timeline only). */
   const locate = (event: { clientX: number; clientY: number }) => {
-    const { mode, filter } = propsRef.current;
+    const { mode, filter, range } = propsRef.current;
     const canvas = canvasRef.current;
     if (mode.kind !== 'timeline' || !canvas) return null;
     const rect = canvas.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
-    const scrollLeft = mode.viewportRef.current?.scrollLeft ?? 0;
-    const lo = filter.minMidi;
-    const hi = Math.max(filter.maxMidi, lo + 1);
+    const { view } = mode;
+    const axis = range ?? filter;
+    const lo = axis.minMidi;
+    const hi = Math.max(axis.maxMidi, lo + 1);
     const h = sizeRef.current.height;
     return {
       x,
       y,
-      time: Math.max(0, (scrollLeft + x) / mode.pixelsPerSecond),
+      time: Math.max(0, view.xToTime(x)),
       midi: Math.round(hi - (y / h) * (hi - lo)),
-      toX: (time: number) => time * mode.pixelsPerSecond - scrollLeft,
-      slack: 3 / mode.pixelsPerSecond,
+      toX: (time: number) => view.timeToX(time),
+      slack: 3 / view.pixelsPerSecond,
     };
   };
 
@@ -176,12 +181,12 @@ export function usePenHandlers(
       if (event.key !== 'Escape' || !penDrag.current) return;
       const drag = penDrag.current;
       penDrag.current = null;
-      const options = penOptions();
-      if (options && drag.last) options.pen.onGesture(drag.last, 'cancel');
+      const { mode } = propsRef.current;
+      if (mode.kind === 'timeline' && mode.pen && drag.last) mode.pen.onGesture(drag.last, 'cancel');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [propsRef]);
 
   const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
     const options = penOptions();
