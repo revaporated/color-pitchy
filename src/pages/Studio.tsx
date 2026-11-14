@@ -537,7 +537,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
       window.alert('The take has no notes that pass the current detection filter.');
       return;
     }
-    downloadBytes(buildMidiFile(notes), `${baseName}-take.mid`);
+    downloadBytes(buildMidiFile(notes, { beats: beatGrid, trackName: `${baseName} take` }), `${baseName}-take.mid`);
   };
 
   // Writes the decoded audio, the reference contour and the settings that
@@ -582,7 +582,10 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
       window.alert('No reference notes pass the current reference clarity.');
       return;
     }
-    downloadBytes(buildMidiFile([...notes]), `${baseName}-reference.mid`);
+    downloadBytes(
+      buildMidiFile(notes, { beats: beatGrid, trackName: `${baseName} reference` }),
+      `${baseName}-reference.mid`,
+    );
   };
 
   const editCount = currentEdits.added.length + currentEdits.removed.length;

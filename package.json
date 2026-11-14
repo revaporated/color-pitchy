@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --no-warnings --experimental-strip-types --import ./scripts/ts-resolve.mjs --test \"tests/*.test.mts\"",
+    "measure": "node --no-warnings --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/measure-tangerine.mts"
   },
   "dependencies": {
     "@fontsource/cascadia-mono": "^5.2.3",

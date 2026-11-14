@@ -84,6 +84,7 @@ export type TrackAnalysis = {
 };
 
 const IDLE: ReferenceState = { status: 'idle', track: null, progress: 0 };
+const ANALYZING: ReferenceState = { status: 'analyzing', track: null, progress: 0 };
 
 function referenceWorkerCount() {
   const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2;
@@ -114,21 +115,17 @@ export function useTrackAnalysis(
   runToken = 0,
 ): TrackAnalysis {
   const { method, smoothing, windowMs, minMidi, maxMidi } = settings;
-  const [peaks, setPeaks] = useState<Float32Array | null>(null);
-  const [reference, setReference] = useState<ReferenceState>(IDLE);
+  // Kept with the buffer they belong to, so a new track never shows the old peaks.
+  const [peaks, setPeaks] = useState<{ buffer: AudioBuffer; peaks: Float32Array } | null>(null);
+  // Kept with the inputs it was computed for. Until the effect reports for new
+  // inputs, the state is derived (idle, or analyzing when a run was asked for).
+  const [result, setResult] = useState<{ buffer: AudioBuffer; key: string; state: ReferenceState } | null>(null);
+  const runKey = `${audioId}|${method}|${smoothing}|${windowMs}|${minMidi}|${maxMidi}|${runToken}`;
   const [mono, setMono] = useState<(MonoTrack & { buffer: AudioBuffer }) | null>(null);
 
   useEffect(() => {
-    setPeaks(null);
-    if (!audioBuffer) {
-      setReference(IDLE);
-      return;
-    }
-    setReference(
-      runToken > 0
-        ? { status: 'analyzing', track: null, progress: 0 }
-        : IDLE, // until the cache answers
-    );
+    if (!audioBuffer) return;
+    const setReference = (state: ReferenceState) => setResult({ buffer: audioBuffer, key: runKey, state });
 
     let cancelled = false;
     const workers: Worker[] = [];
@@ -237,7 +234,7 @@ export function useTrackAnalysis(
       if (cancelled) return;
       const message = event.data;
       if (message.type === 'peaks') {
-        setPeaks(message.peaks);
+        setPeaks({ buffer: audioBuffer, peaks: message.peaks });
       } else if (message.type === 'mono') {
         prep.terminate();
         const { samples, sampleRate } = message;
@@ -271,7 +268,13 @@ export function useTrackAnalysis(
       cancelled = true;
       stopAll();
     };
-  }, [audioBuffer, method, smoothing, windowMs, minMidi, maxMidi, audioId, runToken]);
+  }, [audioBuffer, method, smoothing, windowMs, minMidi, maxMidi, audioId, runToken, runKey]);
 
-  return { peaks, reference, mono: mono && mono.buffer === audioBuffer ? mono : null };
+  const reference: ReferenceState =
+    result && audioBuffer && result.buffer === audioBuffer && result.key === runKey
+      ? result.state
+      : audioBuffer && runToken > 0
+        ? ANALYZING
+        : IDLE; // until the cache answers
+  return { peaks: peaks && peaks.buffer === audioBuffer ? peaks.peaks : null, reference, mono: mono && mono.buffer === audioBuffer ? mono : null };
 }
