@@ -7,6 +7,12 @@ export type BeatState =
   | { status: 'ready'; beats: Float64Array; bpm: number }
   | { status: 'error'; beats: null; bpm: 0; message: string };
 
+/**
+ * Bump when the beat detector changes, so beats saved with projects are
+ * detected again instead of reused.
+ */
+export const BEAT_DETECTOR_VERSION = 1;
+
 const IDLE: BeatState = { status: 'idle', beats: null, bpm: 0 };
 const DETECTING: BeatState = { status: 'detecting', beats: null, bpm: 0 };
 

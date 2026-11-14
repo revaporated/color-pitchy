@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import type { ProjectSettings } from '../storage/projects';
+import type { ProjectStore } from '../project/projectStore';
+import { useProjectState } from '../project/useProject';
 import type { AnalysisSettings } from './useReferenceTrack';
 import type { SpectrogramView } from '../audio/spectrogramImage';
 import type { BeatScale } from '../audio/beatGrid';
@@ -91,10 +92,11 @@ export function usePitchSettings() {
 }
 
 /**
- * Settings that only Studio uses. The reference settings belong to the open
- * project (they depend on the song); the rest depend on your setup and are global.
+ * Settings that only Studio uses. The reference and beat settings belong to
+ * the open project (they depend on the song) and live in its store; the rest
+ * depend on your setup and are global.
  */
-export function useStudioSettings(initial: ProjectSettings) {
+export function useStudioSettings(store: ProjectStore) {
   const [recordTake, setRecordTake] = usePersistentState('studio.recordTake', false);
   const [onlyWhilePlaying, setOnlyWhilePlaying] = usePersistentState('studio.onlyWhilePlaying', true);
   const [syncOffsetMs, setSyncOffsetMs] = usePersistentState('studio.syncOffsetMs', 0);
@@ -110,58 +112,53 @@ export function useStudioSettings(initial: ProjectSettings) {
   const [snapLoopToBeats, setSnapLoopToBeats] = usePersistentState('studio.snapLoopToBeats', true);
   const [metronome, setMetronome] = usePersistentState('studio.metronome', false);
   const [metronomeVolume, setMetronomeVolume] = usePersistentState('studio.metronomeVolume', 0.6);
+
   // Per project: they depend on the song.
-  const [beatScale, setBeatScale] = useState<BeatScale>(() =>
-    initial.beatScale === 0.5 ? 0.5 : initial.beatScale === 2 ? 2 : 1,
-  );
-  const [beatsPerGroup, setBeatsPerGroup] = useState(initial.beatsPerGroup);
-  const [beatOffset, setBeatOffset] = useState(initial.beatOffset);
-  const [playbackRate, setPlaybackRate] = useState(initial.playbackRate);
-
-  const [showReference, setShowReference] = useState(initial.showReference);
-  const [referenceClarity, setReferenceClarity] = useState(initial.referenceClarity);
-  const [referenceOpacity, setReferenceOpacity] = useState(initial.referenceOpacity);
-  // Applied analysis settings. The panel edits a draft and applies it with Analyze.
-  const [analysis, setAnalysis] = useState<AnalysisSettings>(() => ({
-    method: initial.topVoiceReference ? 'topVoice' : 'pitchy',
-    smoothing: initial.referenceSmoothing,
-    windowMs: initial.referenceWindowMs,
-    minMidi: initial.referenceMinMidi,
-    maxMidi: initial.referenceMaxMidi,
-  }));
-
-  const projectSettings: ProjectSettings = useMemo(
+  const { settings } = useProjectState(store);
+  const setters = useMemo(
     () => ({
-      showReference,
-      referenceClarity,
-      referenceOpacity,
-      topVoiceReference: analysis.method === 'topVoice',
-      referenceSmoothing: analysis.smoothing,
-      referenceWindowMs: analysis.windowMs,
-      referenceMinMidi: analysis.minMidi,
-      referenceMaxMidi: analysis.maxMidi,
-      beatScale,
-      beatsPerGroup,
-      beatOffset,
-      playbackRate,
+      setShowReference: store.setter('showReference'),
+      setReferenceClarity: store.setter('referenceClarity'),
+      setReferenceOpacity: store.setter('referenceOpacity'),
+      setBeatsPerGroup: store.setter('beatsPerGroup'),
+      setBeatOffset: store.setter('beatOffset'),
+      setPlaybackRate: store.setter('playbackRate'),
+      setBeatScale: store.setter('beatScale') as Dispatch<SetStateAction<BeatScale>>,
+      /** Applied analysis settings. The panel edits a draft and applies it with Analyze. */
+      setAnalysis: (next: AnalysisSettings) =>
+        store.updateSettings({
+          topVoiceReference: next.method === 'topVoice',
+          referenceSmoothing: next.smoothing,
+          referenceWindowMs: next.windowMs,
+          referenceMinMidi: next.minMidi,
+          referenceMaxMidi: next.maxMidi,
+        }),
     }),
-    [showReference, referenceClarity, referenceOpacity, analysis, beatScale, beatsPerGroup, beatOffset, playbackRate],
+    [store],
+  );
+  const beatScale: BeatScale = settings.beatScale === 0.5 ? 0.5 : settings.beatScale === 2 ? 2 : 1;
+  const { topVoiceReference, referenceSmoothing, referenceWindowMs, referenceMinMidi, referenceMaxMidi } = settings;
+  const analysis: AnalysisSettings = useMemo(
+    () => ({
+      method: topVoiceReference ? 'topVoice' : 'pitchy',
+      smoothing: referenceSmoothing,
+      windowMs: referenceWindowMs,
+      minMidi: referenceMinMidi,
+      maxMidi: referenceMaxMidi,
+    }),
+    [topVoiceReference, referenceSmoothing, referenceWindowMs, referenceMinMidi, referenceMaxMidi],
   );
 
   return {
-    projectSettings,
+    ...setters,
     recordTake,
     setRecordTake,
     onlyWhilePlaying,
     setOnlyWhilePlaying,
-    showReference,
-    setShowReference,
-    referenceClarity,
-    setReferenceClarity,
-    referenceOpacity,
-    setReferenceOpacity,
+    showReference: settings.showReference,
+    referenceClarity: settings.referenceClarity,
+    referenceOpacity: settings.referenceOpacity,
     analysis,
-    setAnalysis,
     syncOffsetMs,
     setSyncOffsetMs,
     playReference,
@@ -187,12 +184,8 @@ export function useStudioSettings(initial: ProjectSettings) {
     metronomeVolume,
     setMetronomeVolume,
     beatScale,
-    setBeatScale,
-    beatsPerGroup,
-    setBeatsPerGroup,
-    beatOffset,
-    setBeatOffset,
-    playbackRate,
-    setPlaybackRate,
+    beatsPerGroup: settings.beatsPerGroup,
+    beatOffset: settings.beatOffset,
+    playbackRate: settings.playbackRate,
   };
 }

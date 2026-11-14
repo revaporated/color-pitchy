@@ -2,7 +2,8 @@
  * Library storage. Everything lives in IndexedDB (audio files are far too big
  * for localStorage):
  *
- * - projects:   one record per project (name, which audio, per-project settings)
+ * - projects:   one record per project (name, which audio, per-project settings,
+ *               detected beats; see project/projectDoc.ts for the shape and upgrades)
  * - audio:      the uploaded files, shared by every project that uses them
  * - takes:      the recorded take of each project
  * - references: cached reference contours, per audio file and analysis settings
@@ -10,43 +11,20 @@
  */
 
 import type { NoteEdits } from '../audio/noteEdits';
+import {
+  BUILTIN_SETTINGS,
+  migrateProjectRecord,
+  PROJECT_SCHEMA_VERSION,
+  type ProjectData,
+  type ProjectMeta,
+  type ProjectSettings,
+} from '../project/projectDoc';
+
+export type { ProjectMeta, ProjectSettings } from '../project/projectDoc';
 
 const DB_NAME = 'color-pitchy';
 const DB_VERSION = 2;
 const LEGACY_PREFIX = 'color-pitchy:studio.';
-
-export type ProjectSettings = {
-  showReference: boolean;
-  referenceClarity: number;
-  referenceOpacity: number;
-  topVoiceReference: boolean;
-  referenceSmoothing: number;
-  /** Analysis window in ms, 0 = automatic. */
-  referenceWindowMs: number;
-  /** Note range the reference analysis reports (MIDI). */
-  referenceMinMidi: number;
-  referenceMaxMidi: number;
-  /** Detected beats used as found (1), halved (0.5) or doubled (2). */
-  beatScale: number;
-  /** Beats per shaded group (usually a bar). */
-  beatsPerGroup: number;
-  /** Which beat starts the first group, 0..beatsPerGroup-1. */
-  beatOffset: number;
-  /** Playback speed; pitch is kept. */
-  playbackRate: number;
-};
-
-export type ProjectMeta = {
-  id: string;
-  name: string;
-  createdAt: number;
-  updatedAt: number;
-  audioId: string | null;
-  fileName: string | null;
-  duration: number | null;
-  hasTake: boolean;
-  settings: ProjectSettings;
-};
 
 export type AudioRecord = {
   id: string;
@@ -71,28 +49,8 @@ export type ReferenceRecord = {
   clarity: Float32Array;
 };
 
-const BUILTIN_SETTINGS: ProjectSettings = {
-  showReference: true,
-  referenceClarity: 0.8,
-  referenceOpacity: 0.16,
-  topVoiceReference: false,
-  referenceSmoothing: 4,
-  referenceWindowMs: 0,
-  referenceMinMidi: 48,
-  referenceMaxMidi: 96,
-  beatScale: 1,
-  beatsPerGroup: 4,
-  beatOffset: 0,
-  playbackRate: 1,
-};
-
 /** Settings that only make sense for the song they were set on, so a new project doesn't inherit them. */
 const SONG_SPECIFIC = new Set<keyof ProjectSettings>(['beatScale', 'beatOffset', 'playbackRate']);
-
-/** Projects saved before a setting existed get its built-in default. */
-function withSettingDefaults(project: ProjectMeta): ProjectMeta {
-  return { ...project, settings: { ...BUILTIN_SETTINGS, ...project.settings } };
-}
 
 /**
  * Settings for a new project: whatever was last used in Studio (kept in
@@ -256,22 +214,31 @@ export async function listProjects(): Promise<ProjectMeta[]> {
   const projects = await transact(['projects'], 'readonly', (tx) =>
     asPromise(tx.objectStore('projects').getAll() as IDBRequest<ProjectMeta[]>),
   );
-  return projects.map(withSettingDefaults).sort((a, b) => b.updatedAt - a.updatedAt);
+  return projects.map(migrateProjectRecord).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export async function getProject(id: string): Promise<ProjectMeta | undefined> {
   const project = await transact(['projects'], 'readonly', (tx) =>
     asPromise(tx.objectStore('projects').get(id) as IDBRequest<ProjectMeta | undefined>),
   );
-  return project ? withSettingDefaults(project) : undefined;
+  return project ? migrateProjectRecord(project) : undefined;
 }
 
-export async function updateProject(id: string, patch: Partial<Omit<ProjectMeta, 'id'>>) {
+/**
+ * Changes some fields of a project. `touch: false` keeps `updatedAt` (for
+ * data the app derives, such as detected beats, rather than your work).
+ */
+export async function updateProject(
+  id: string,
+  patch: Partial<Omit<ProjectMeta, 'id'>>,
+  { touch = true }: { touch?: boolean } = {},
+) {
   return transact(['projects'], 'readwrite', async (tx) => {
     const store = tx.objectStore('projects');
     const current = (await asPromise(store.get(id))) as ProjectMeta | undefined;
     if (!current) return undefined;
-    const next: ProjectMeta = { ...current, ...patch, updatedAt: patch.updatedAt ?? Date.now() };
+    const updatedAt = patch.updatedAt ?? (touch ? Date.now() : current.updatedAt);
+    const next: ProjectMeta = { ...current, ...patch, updatedAt, schemaVersion: PROJECT_SCHEMA_VERSION };
     store.put(next);
     return next;
   });
@@ -316,6 +283,8 @@ export async function createProject({ name, file, audioId }: NewProject): Promis
     duration,
     hasTake: false,
     settings: defaultProjectSettings(),
+    beats: null,
+    schemaVersion: PROJECT_SCHEMA_VERSION,
   };
   await transact(['projects'], 'readwrite', (tx) => {
     tx.objectStore('projects').put(project);
@@ -383,6 +352,7 @@ export async function setProjectAudio(id: string, file: File) {
     fileName: audio.fileName,
     duration,
     hasTake: false,
+    beats: null,
   });
   if (previous?.audioId) await deleteAudioIfUnused(previous.audioId);
   return { project, audio };
@@ -492,5 +462,37 @@ export async function saveEdits(projectId: string, edits: NoteEdits) {
     } else {
       tx.objectStore('edits').delete(projectId);
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Backup import
+
+/**
+ * Replaces a project's settings, note edits, take and beats with the ones in
+ * a backup file, in one transaction. The project keeps its own audio. Beats
+ * are kept only when `sameAudio` says the backup was made from the same file.
+ */
+export async function importProjectData(id: string, data: ProjectData, sameAudio: boolean) {
+  await transact(['projects', 'edits', 'takes'], 'readwrite', async (tx) => {
+    const projects = tx.objectStore('projects');
+    const current = (await asPromise(projects.get(id))) as ProjectMeta | undefined;
+    if (!current) throw new Error('The project no longer exists.');
+    const beats = sameAudio && data.beats && current.audioId ? { ...data.beats, audioId: current.audioId } : null;
+    projects.put({
+      ...current,
+      settings: data.settings,
+      beats,
+      hasTake: data.take !== null,
+      updatedAt: Date.now(),
+      schemaVersion: PROJECT_SCHEMA_VERSION,
+    } satisfies ProjectMeta);
+    if (data.edits.added.length > 0 || data.edits.removed.length > 0) {
+      tx.objectStore('edits').put({ projectId: id, added: [...data.edits.added], removed: [...data.edits.removed] });
+    } else {
+      tx.objectStore('edits').delete(id);
+    }
+    if (data.take) tx.objectStore('takes').put({ projectId: id, ...data.take });
+    else tx.objectStore('takes').delete(id);
   });
 }

@@ -7,6 +7,8 @@ import {
   FiMoreHorizontal,
   FiPlay,
   FiTool,
+  FiUploadCloud,
+  FiSave,
   FiTrash2,
   FiUpload,
   FiXCircle,
@@ -27,7 +29,7 @@ import { NoteSet } from '../audio/noteSet';
 import { SpectrogramImage } from '../audio/spectrogramImage';
 import { BeatGrid } from '../audio/beatGrid';
 import { BeatControls } from '../components/BeatControls';
-import { useBeats } from '../hooks/useBeats';
+import { BEAT_DETECTOR_VERSION, useBeats, type BeatState } from '../hooks/useBeats';
 import { useSpectrogram } from '../hooks/useSpectrogram';
 import { ReferencePlayer } from '../audio/referencePlayer';
 import { FRAME_ORDER, onAnimationFrame } from '../audio/frameLoop';
@@ -57,7 +59,7 @@ import {
   getTake,
   AUDIO_ACCEPT,
   isSupportedAudio,
-  rememberProjectSettings,
+  importProjectData,
   saveTake,
   setProjectAudio,
   UNSUPPORTED_AUDIO_MESSAGE,
@@ -66,6 +68,8 @@ import {
 import type { AudioRecord, ProjectMeta, TakeRecord } from '../storage/projects';
 import { contourCsv, debugExportBase, encodeWav, saveDebugFile } from '../utils/debugExport';
 import { buildMidiFile, downloadBytes } from '../utils/midi';
+import { buildProjectExport, parseProjectExport } from '../project/projectDoc';
+import { useProjectState, useProjectStore } from '../project/useProject';
 import { collectPitches, segmentNotes } from '../utils/notes';
 import type { DetectionFilter } from '../utils/pitch';
 import { PIXELS_PER_SECOND } from '../utils/waveform';
@@ -155,7 +159,9 @@ type SessionProps = {
 function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   const projectId = project.id;
   const { controls, filter } = usePitchSettings();
-  const studio = useStudioSettings(project.settings);
+  // Settings, note edits and beats of this project: one store, one save.
+  const store = useProjectStore(project);
+  const studio = useStudioSettings(store);
 
   const [audio, setAudio] = useState<AudioRecord | null>(initialAudio);
   // The saved take to restore once the track has decoded (null after a track change).
@@ -168,19 +174,6 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     onPlayError: handlePlayError,
   });
   const hasAudio = Boolean(audioUrl && audioBuffer);
-
-  // Save the project's settings when they change (debounced, skipping the initial values).
-  const savedSettingsRef = useRef(studio.projectSettings);
-  useEffect(() => {
-    const settings = studio.projectSettings;
-    if (settings === savedSettingsRef.current) return;
-    const timer = setTimeout(() => {
-      savedSettingsRef.current = settings;
-      rememberProjectSettings(settings);
-      void updateProject(projectId, { settings });
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [projectId, studio.projectSettings]);
 
   // Fill in the duration in the library listing if it wasn't known yet.
   useEffect(() => {
@@ -237,17 +230,19 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   }, [duration, storedTake]);
 
   // Autosave the take: every couple of seconds while it changes, when the tab
-  // is hidden, and on leaving Studio.
+  // is hidden, and on leaving Studio. `flushTakeRef` saves it now.
+  const flushTakeRef = useRef<() => Promise<void>>(async () => undefined);
   useEffect(() => {
     let savedVersion = take.version;
     const flush = () => {
-      if (take.version === savedVersion) return;
+      if (take.version === savedVersion) return Promise.resolve();
       savedVersion = take.version;
       const record = take.hasData()
         ? { gridHz: take.gridHz, frequency: take.frequency.slice(), clarity: take.clarity.slice() }
         : null;
-      void saveTake(projectId, record).catch((err) => console.error('Saving the take failed', err));
+      return saveTake(projectId, record).catch((err) => console.error('Saving the take failed', err));
     };
+    flushTakeRef.current = flush;
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') flush();
     };
@@ -258,7 +253,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', flush);
-      flush();
+      void flush();
     };
   }, [take, projectId]);
   const preview = useMemo(() => new PitchTrack(duration, TAKE_GRID_HZ), [duration]);
@@ -267,8 +262,28 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
   const { analysis, setAnalysis } = studio;
   const { peaks, reference, mono } = useTrackAnalysis(audioBuffer, analysis, audio?.id ?? null, runToken);
 
-  // Beats: detected once per track; the grid applies your tempo and bar fixes.
-  const beatDetection = useBeats(mono);
+  // Beats: detected once per track and saved with the project, so reopening
+  // shows them at once. The grid applies your tempo and bar fixes.
+  const { beats: projectBeats } = useProjectState(store);
+  const savedBeats =
+    projectBeats && audio && projectBeats.audioId === audio.id && projectBeats.version === BEAT_DETECTOR_VERSION
+      ? projectBeats
+      : null;
+  const detectedBeats = useBeats(savedBeats ? null : mono);
+  const savedBeatState: BeatState | null = useMemo(
+    () => (savedBeats ? { status: 'ready', beats: Float64Array.from(savedBeats.times), bpm: savedBeats.bpm } : null),
+    [savedBeats],
+  );
+  const beatDetection = savedBeatState ?? detectedBeats;
+  useEffect(() => {
+    if (savedBeats || !audio || detectedBeats.status !== 'ready') return;
+    store.setBeats({
+      version: BEAT_DETECTOR_VERSION,
+      audioId: audio.id,
+      times: Array.from(detectedBeats.beats),
+      bpm: detectedBeats.bpm,
+    });
+  }, [store, savedBeats, audio, detectedBeats]);
   const beatGrid = useMemo(
     () =>
       beatDetection.beats
@@ -331,7 +346,7 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
 
   // Pen mode: your edits sit on top of the analysis (see noteEdits.ts), so
   // re-analyzing replaces the auto notes but keeps what you changed by hand.
-  const noteEdits = useNoteEdits(projectId);
+  const noteEdits = useNoteEdits(store);
   const { preview: previewEdit, commit: commitEdit, cancel: cancelEdit, apply: applyEdit } = noteEdits;
   const { undo: undoEdit, redo: redoEdit, reset: resetEdits, edits: currentEdits } = noteEdits;
   // Pan and Select set what dragging the waveform does; Pen edits the reference notes on the graph.
@@ -588,6 +603,50 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
     );
   };
 
+  // Backup of everything but the audio: settings, note edits, take and beats.
+  const exportProjectData = async () => {
+    store.flush(true);
+    await flushTakeRef.current();
+    const { settings, edits, beats } = store.getState();
+    const json = buildProjectExport({
+      name: project.name,
+      audio: audio ? { fileName: audio.fileName, size: audio.size, duration: duration || null } : null,
+      settings,
+      edits,
+      beats,
+      take: take.hasData()
+        ? { gridHz: take.gridHz, frequency: take.frequency.slice(), clarity: take.clarity.slice() }
+        : null,
+    });
+    downloadBytes(new TextEncoder().encode(json), `${baseName}-project.json`, 'application/json');
+  };
+
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const importProjectFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const data = parseProjectExport(await file.text());
+      const sameAudio = Boolean(audio && data.audio && data.audio.fileName === audio.fileName && data.audio.size === audio.size);
+      const warning =
+        data.audio && !sameAudio
+          ? `\n\nThis data was saved with the track "${data.audio.fileName}", and this project has ${
+              audio ? `"${audio.fileName}"` : 'no track'
+            }. Notes and the take may not line up.`
+          : '';
+      if (!window.confirm(`Replace this project's settings, note edits and take with "${data.name}"?${warning}`)) return;
+      stop();
+      store.flush(true);
+      await flushTakeRef.current();
+      store.discardPendingSaves();
+      await importProjectData(projectId, data, sameAudio);
+      window.location.reload();
+    } catch (err) {
+      window.alert(`Couldn't import the project data: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const editCount = currentEdits.added.length + currentEdits.removed.length;
   const noteCount = referenceNotes?.count ?? null;
   const referenceReady = reference.status === 'ready';
@@ -829,6 +888,23 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
             Export reference as MIDI
           </MenuItem>
           <div className="menu__sep" role="separator" />
+          <MenuItem
+            close={close}
+            icon={<FiSave />}
+            onSelect={() => void exportProjectData()}
+            title="Save this project's settings, note edits, take and beats to a file (the audio is not included)"
+          >
+            Export project data
+          </MenuItem>
+          <MenuItem
+            close={close}
+            icon={<FiUploadCloud />}
+            onSelect={() => importInputRef.current?.click()}
+            title="Replace this project's settings, note edits, take and beats with a saved file"
+          >
+            Import project data...
+          </MenuItem>
+          <div className="menu__sep" role="separator" />
           <MenuItem close={close} icon={<FiTrash2 />} onSelect={clearTake} disabled={!hasAudio} danger>
             Clear take...
           </MenuItem>
@@ -965,6 +1041,13 @@ function StudioSession({ project, initialAudio, initialTake }: SessionProps) {
           accept={AUDIO_ACCEPT}
           hidden
           onChange={(event) => void handleUpload(event)}
+        />
+        <input
+          ref={importInputRef}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={(event) => void importProjectFile(event)}
         />
       </div>
 
